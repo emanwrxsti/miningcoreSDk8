@@ -26,7 +26,7 @@ public static class CryptonoteConstants
 #if DEBUG
     public const int PayoutMinBlockConfirmations = 2;
 #else
-        public const int PayoutMinBlockConfirmations = 60;
+    public const int PayoutMinBlockConfirmations = 60;
 #endif
 
     public const int InstanceIdSize = 4;
@@ -40,6 +40,11 @@ public static class CryptonoteConstants
     public const int BlobNonceOffset = 39;
 
     public const decimal StaticTransactionFeeReserve = 0.03m; // in monero
+}
+
+public static class ScalaConstants
+{
+    public const int ScalaBlobType = 14;
 }
 
 public static class ZephyrConstants
