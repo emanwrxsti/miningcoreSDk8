@@ -479,6 +479,8 @@ public class EquihashPool : PoolBase
                     cleanJob = (bool)((object[])currentJobParams)[^1];
                     break;
             }
+            if(cleanJob)
+                cleanJob = !cleanJob;
 
             // IMPORTANT: for vardiff updates, do not clean previous jobs
             if (cleanJob)
