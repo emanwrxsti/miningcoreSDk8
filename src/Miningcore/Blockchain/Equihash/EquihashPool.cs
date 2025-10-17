@@ -55,18 +55,18 @@ public class EquihashPool : PoolBase
 
         extraConfig = pc.Extra.SafeExtensionDataAs<EquihashPoolConfigExtra>();
 
-        if(pc.Template.As<EquihashCoinTemplate>().UsesZCashAddressFormat &&
+        if (pc.Template.As<EquihashCoinTemplate>().UsesZCashAddressFormat &&
            string.IsNullOrEmpty(extraConfig?.ZAddress))
             throw new PoolStartupException("Pool z-address is not configured", pc.Id);
     }
 
     private EquihashJobManager createEquihashExtraNonceProvider()
     {
-        switch(coin.Symbol)
+        switch (coin.Symbol)
         {
             case "VRSC":
                 return ctx.Resolve<EquihashJobManager>(new TypedParameter(typeof(IExtraNonceProvider), new VeruscoinExtraNonceProvider(poolConfig.Id, clusterConfig.InstanceId)));
-            
+
             default:
                 return ctx.Resolve<EquihashJobManager>(new TypedParameter(typeof(IExtraNonceProvider), new EquihashExtraNonceProvider(poolConfig.Id, clusterConfig.InstanceId)));
         }
@@ -80,12 +80,12 @@ public class EquihashPool : PoolBase
 
         await manager.StartAsync(ct);
 
-        if(poolConfig.EnableInternalStratum == true)
+        if (poolConfig.EnableInternalStratum == true)
         {
             disposables.Add(manager.Jobs
                 .Select(job => Observable.FromAsync(() =>
-                    Guard(()=> OnNewJobAsync(job),
-                        ex=> logger.Debug(() => $"{nameof(OnNewJobAsync)}: {ex.Message}"))))
+                    Guard(() => OnNewJobAsync(job),
+                        ex => logger.Debug(() => $"{nameof(OnNewJobAsync)}: {ex.Message}"))))
                 .Concat()
                 .Subscribe(_ => { }, ex =>
                 {
@@ -102,7 +102,7 @@ public class EquihashPool : PoolBase
             disposables.Add(manager.Jobs.Subscribe());
         }
 
-        hashrateDivisor = (double) new BigRational(manager.ChainConfig.Diff1BValue, EquihashConstants.ZCashDiff1b);
+        hashrateDivisor = (double)new BigRational(manager.ChainConfig.Diff1BValue, EquihashConstants.ZCashDiff1b);
     }
 
     protected override async Task InitStatsAsync(CancellationToken ct)
@@ -117,7 +117,7 @@ public class EquihashPool : PoolBase
         var request = tsRequest.Value;
         var context = connection.ContextAs<EquihashWorkerContext>();
 
-        if(request.Id == null)
+        if (request.Id == null)
             throw new StratumException(StratumError.MinusOne, "missing request id");
 
         var requestParams = request.ParamsAs<string[]>();
@@ -135,7 +135,7 @@ public class EquihashPool : PoolBase
         // [We miss you Oliver <3 We miss you so much <3 Respect the goddamn standards Nicehash :(]
         var response = new JsonRpcResponse<object[]>(data, request.Id);
 
-        if(context.IsNicehash || poolConfig.EnableAsicBoost == true)
+        if (context.IsNicehash || poolConfig.EnableAsicBoost == true)
         {
             response.Extra = new Dictionary<string, object>();
             response.Extra["error"] = null;
@@ -151,7 +151,7 @@ public class EquihashPool : PoolBase
     {
         var request = tsRequest.Value;
 
-        if(request.Id == null)
+        if (request.Id == null)
             throw new StratumException(StratumError.MinusOne, "missing request id");
 
         var context = connection.ContextAs<EquihashWorkerContext>();
@@ -170,19 +170,19 @@ public class EquihashPool : PoolBase
         context.Miner = minerName;
         context.Worker = workerName;
 
-        if(context.IsAuthorized)
+        if (context.IsAuthorized)
         {
             // Nicehash's stupid validator insists on "error" property present
             // in successful responses which is a violation of the JSON-RPC spec
             // [We miss you Oliver <3 We miss you so much <3 Respect the goddamn standards Nicehash :(]
             var response = new JsonRpcResponse<object>(context.IsAuthorized, request.Id);
 
-            if(context.IsNicehash || poolConfig.EnableAsicBoost == true)
+            if (context.IsNicehash || poolConfig.EnableAsicBoost == true)
             {
                 response.Extra = new Dictionary<string, object>();
                 response.Extra["error"] = null;
             }
-            
+
             // respond
             await connection.RespondAsync(response);
 
@@ -195,9 +195,9 @@ public class EquihashPool : PoolBase
             // Nicehash support
             var nicehashDiff = await GetNicehashStaticMinDiff(context, coin.Name, coin.GetAlgorithmName());
 
-            if(nicehashDiff.HasValue)
+            if (nicehashDiff.HasValue)
             {
-                if(!staticDiff.HasValue || nicehashDiff > staticDiff)
+                if (!staticDiff.HasValue || nicehashDiff > staticDiff)
                 {
                     logger.Info(() => $"[{connection.ConnectionId}] Nicehash detected. Using API supplied difficulty of {nicehashDiff.Value}");
 
@@ -209,7 +209,7 @@ public class EquihashPool : PoolBase
             }
 
             // Static diff
-            if(staticDiff.HasValue &&
+            if (staticDiff.HasValue &&
                (context.VarDiff != null && staticDiff.Value >= context.VarDiff.Config.MinDiff ||
                    context.VarDiff == null && staticDiff.Value > context.Difficulty))
             {
@@ -232,7 +232,7 @@ public class EquihashPool : PoolBase
         {
             await connection.RespondErrorAsync(StratumError.UnauthorizedWorker, "Authorization failed", request.Id, context.IsAuthorized);
 
-            if(clusterConfig?.Banning?.BanOnLoginFailure is null or true)
+            if (clusterConfig?.Banning?.BanOnLoginFailure is null or true)
             {
                 // issue short-time ban if unauthorized to prevent DDos on daemon (validateaddress RPC)
                 logger.Info(() => $"[{connection.ConnectionId}] Banning unauthorized worker {minerName} for {loginFailureBanTimeout.TotalSeconds} sec");
@@ -250,7 +250,7 @@ public class EquihashPool : PoolBase
         var job = manager.GetJobForStratum();
 
         // update context
-        lock(context)
+        lock (context)
         {
             context.AddJob(job, manager.maxActiveJobs);
         }
@@ -265,13 +265,13 @@ public class EquihashPool : PoolBase
 
         try
         {
-            if(request.Id == null)
+            if (request.Id == null)
                 throw new StratumException(StratumError.MinusOne, "missing request id");
 
             // check age of submission (aged submissions are usually caused by high server load)
             var requestAge = clock.Now - tsRequest.Timestamp.UtcDateTime;
 
-            if(requestAge > maxShareAge)
+            if (requestAge > maxShareAge)
             {
                 logger.Warn(() => $"[{connection.ConnectionId}] Dropping stale share submission request (server overloaded?)");
                 return;
@@ -281,27 +281,27 @@ public class EquihashPool : PoolBase
             context.LastActivity = clock.Now;
 
             // validate worker
-            if(!context.IsAuthorized)
+            if (!context.IsAuthorized)
                 throw new StratumException(StratumError.UnauthorizedWorker, "unauthorized worker");
-            else if(!context.IsSubscribed)
+            else if (!context.IsSubscribed)
                 throw new StratumException(StratumError.NotSubscribed, "not subscribed");
 
             var requestParams = request.ParamsAs<string[]>();
 
             // submit
             var share = await manager.SubmitShareAsync(connection, requestParams, ct);
-            
+
             // Nicehash's stupid validator insists on "error" property present
             // in successful responses which is a violation of the JSON-RPC spec
             // [We miss you Oliver <3 We miss you so much <3 Respect the goddamn standards Nicehash :(]
             var response = new JsonRpcResponse<object>(true, request.Id);
 
-            if(context.IsNicehash || poolConfig.EnableAsicBoost == true)
+            if (context.IsNicehash || poolConfig.EnableAsicBoost == true)
             {
                 response.Extra = new Dictionary<string, object>();
                 response.Extra["error"] = null;
             }
-            
+
             await connection.RespondAsync(response);
 
             // publish
@@ -313,7 +313,7 @@ public class EquihashPool : PoolBase
             logger.Info(() => $"[{connection.ConnectionId}] Share accepted: D={Math.Round(share.Difficulty, 3)}");
 
             // update pool stats
-            if(share.IsBlockCandidate)
+            if (share.IsBlockCandidate)
                 poolStats.LastPoolBlockTime = clock.Now;
 
             // update client stats
@@ -322,7 +322,7 @@ public class EquihashPool : PoolBase
             await UpdateVarDiffAsync(connection, false, ct);
         }
 
-        catch(StratumException ex)
+        catch (StratumException ex)
         {
             // telemetry
             PublishTelemetry(TelemetryCategory.Share, clock.Now - tsRequest.Timestamp.UtcDateTime, false);
@@ -343,20 +343,20 @@ public class EquihashPool : PoolBase
         var request = tsRequest.Value;
         var context = connection.ContextAs<EquihashWorkerContext>();
 
-        if(request.Id == null)
+        if (request.Id == null)
             throw new StratumException(StratumError.MinusOne, "missing request id");
 
         var requestParams = request.ParamsAs<string[]>();
         var target = requestParams.FirstOrDefault();
 
-        if(!string.IsNullOrEmpty(target))
+        if (!string.IsNullOrEmpty(target))
         {
-            if(System.Numerics.BigInteger.TryParse(target, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var targetBig))
+            if (System.Numerics.BigInteger.TryParse(target, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var targetBig))
             {
-                var newDiff = (double) new BigRational(manager.ChainConfig.Diff1BValue, targetBig);
+                var newDiff = (double)new BigRational(manager.ChainConfig.Diff1BValue, targetBig);
                 var poolEndpoint = poolConfig.Ports[connection.LocalEndpoint.Port];
 
-                if(newDiff >= poolEndpoint.Difficulty)
+                if (newDiff >= poolEndpoint.Difficulty)
                 {
                     context.EnqueueNewDifficulty(newDiff);
                     context.ApplyPendingDifficulty();
@@ -383,7 +383,7 @@ public class EquihashPool : PoolBase
 
         try
         {
-            switch(request.Method)
+            switch (request.Method)
             {
                 case BitcoinStratumMethods.Subscribe:
                     await OnSubscribeAsync(connection, tsRequest);
@@ -413,7 +413,7 @@ public class EquihashPool : PoolBase
             }
         }
 
-        catch(StratumException ex)
+        catch (StratumException ex)
         {
             await connection.RespondErrorAsync(ex.Code, ex.Message, request.Id, false);
         }
@@ -423,18 +423,18 @@ public class EquihashPool : PoolBase
     {
         currentJobParams = jobParams;
 
-        logger.Info(() => $"Broadcasting job {((object[]) jobParams)[0]}");
+        logger.Info(() => $"Broadcasting job {((object[])jobParams)[0]}");
 
         bool cleanJob;
-        switch(coin.Symbol)
+        switch (coin.Symbol)
         {
             case "VRSC":
 
-                cleanJob = (bool) ((object[]) jobParams)[^2];
+                cleanJob = (bool)((object[])jobParams)[^2];
                 break;
             default:
 
-                cleanJob = (bool) ((object[]) jobParams)[^1];
+                cleanJob = (bool)((object[])jobParams)[^1];
                 break;
         }
 
@@ -444,7 +444,7 @@ public class EquihashPool : PoolBase
             var minerJobParams = CreateWorkerJob(connection, cleanJob);
 
             // varDiff: if the client has a pending difficulty change, apply it now
-            if(context.ApplyPendingDifficulty())
+            if (context.ApplyPendingDifficulty())
                 await connection.NotifyAsync(EquihashStratumMethods.SetTarget, new object[] { EncodeTarget(context.Difficulty) });
 
             // send job
@@ -456,7 +456,7 @@ public class EquihashPool : PoolBase
     {
         var multiplier = BitcoinConstants.Pow2x32;
         var result = shares * multiplier / interval / 1000000 * 2;
-        
+
         result /= hashrateDivisor;
         return result;
     }
@@ -467,22 +467,24 @@ public class EquihashPool : PoolBase
     {
         await base.OnVarDiffUpdateAsync(connection, newDiff, ct);
 
-        if(connection.Context.ApplyPendingDifficulty())
+        if (connection.Context.ApplyPendingDifficulty())
         {
             bool cleanJob;
-            switch(coin.Symbol)
+            switch (coin.Symbol)
             {
                 case "VRSC":
-
-                    cleanJob = (bool) ((object[]) currentJobParams)[^2];
+                    cleanJob = (bool)((object[])currentJobParams)[^2];
                     break;
                 default:
-
-                    cleanJob = (bool) ((object[]) currentJobParams)[^1];
+                    cleanJob = (bool)((object[])currentJobParams)[^1];
                     break;
             }
             if(cleanJob)
                 cleanJob = !cleanJob;
+
+            // IMPORTANT: for vardiff updates, do not clean previous jobs
+            if (cleanJob)
+                cleanJob = !cleanJob;   // i.e., force false if it was true
 
             var minerJobParams = CreateWorkerJob(connection, cleanJob);
 

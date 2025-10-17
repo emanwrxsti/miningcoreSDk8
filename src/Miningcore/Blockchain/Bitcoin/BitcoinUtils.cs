@@ -1,56 +1,124 @@
+using System;
 using System.Diagnostics;
 using NBitcoin;
 using NBitcoin.DataEncoders;
 
-namespace Miningcore.Blockchain.Bitcoin;
-
-public static class BitcoinUtils
+namespace Miningcore.Blockchain.Bitcoin
 {
-    /// <summary>
-    /// Bitcoin addresses are implemented using the Base58Check encoding of the hash of either:
-    /// Pay-to-script-hash(p2sh): payload is: RIPEMD160(SHA256(redeemScript)) where redeemScript is a
-    /// script the wallet knows how to spend; version byte = 0x05 (these addresses begin with the digit '3')
-    /// Pay-to-pubkey-hash(p2pkh): payload is RIPEMD160(SHA256(ECDSA_publicKey)) where
-    /// ECDSA_publicKey is a public key the wallet knows the private key for; version byte = 0x00
-    /// (these addresses begin with the digit '1')
-    /// The resulting hash in both of these cases is always exactly 20 bytes.
-    /// </summary>
-    public static IDestination AddressToDestination(string address, Network expectedNetwork)
+    public static class BitcoinUtils
     {
-        var decoded = Encoders.Base58Check.DecodeData(address);
-        var networkVersionBytes = expectedNetwork.GetVersionBytes(Base58Type.PUBKEY_ADDRESS, true);
-        decoded = decoded.Skip(networkVersionBytes.Length).ToArray();
-        var result = new KeyId(decoded);
+        /// <summary>
+        /// Converts any valid address from the <paramref name="expectedNetwork"/> into an IDestination.
+        /// Supports Base58 (P2PKH/P2SH) and Bech32/Bech32m (P2WPKH, P2WSH, Taproot v1, etc).
+        /// </summary>
+        public static IDestination AddressToDestination(string address, Network expectedNetwork)
+        {
+            if (string.IsNullOrWhiteSpace(address))
+                throw new ArgumentException("address is null/empty", nameof(address));
+            if (expectedNetwork == null)
+                throw new ArgumentNullException(nameof(expectedNetwork));
 
-        return result;
-    }
+            // Usa o parser oficial do NBitcoin (lida com base58 + bech32/bech32m)
+            var addr = BitcoinAddress.Create(address, expectedNetwork);
 
-    public static IDestination BechSegwitAddressToDestination(string address, Network expectedNetwork, string bechPrefix)
-    {
-        var encoder = Encoders.Bech32(bechPrefix);
-        var decoded = encoder.Decode(address, out var witVersion);
-        var result = new WitKeyId(decoded);
+            // Extrai o destino a partir do ScriptPubKey
+            var dest = addr.ScriptPubKey.GetDestination(expectedNetwork);
+            if (dest == null)
+                throw new FormatException($"Unable to derive destination from address '{address}' for network '{expectedNetwork.Name}'.");
 
-        Debug.Assert(result.GetAddress(expectedNetwork).ToString() == address);
-        return result;
-    }
+            return dest;
+        }
 
-    public static IDestination BCashAddressToDestination(string address, Network expectedNetwork)
-    {
-        var bcash = NBitcoin.Altcoins.BCash.Instance.GetNetwork(expectedNetwork.ChainName);
-        var trashAddress = bcash.Parse<NBitcoin.Altcoins.BCash.BTrashPubKeyAddress>(address);
-        return trashAddress.ScriptPubKey.GetDestinationAddress(bcash);
-    }
+        /// <summary>
+        /// Converts a Bech32 (or Bech32m) address to IDestination.
+        /// If <paramref name="bechPrefix"/> is provided (for altchains with custom HRP),
+        /// attempts to decode with that HRP when the default parser fails.
+        /// </summary>
+        public static IDestination BechSegwitAddressToDestination(string address, Network expectedNetwork, string bechPrefix = null)
+        {
+            if (string.IsNullOrWhiteSpace(address))
+                throw new ArgumentException("address is null/empty", nameof(address));
+            if (expectedNetwork == null)
+                throw new ArgumentNullException(nameof(expectedNetwork));
 
-    public static IDestination LitecoinAddressToDestination(string address, Network expectedNetwork)
-    {
-        var litecoin = NBitcoin.Altcoins.Litecoin.Instance.GetNetwork(expectedNetwork.ChainName);
-        var encoder = litecoin.GetBech32Encoder(Bech32Type.WITNESS_PUBKEY_ADDRESS, true);
+            // 1) First try via single parser (covers v0/v1, p2wpkh/p2wsh/taproot, etc.)
+            try
+            {
+                return AddressToDestination(address, expectedNetwork);
+            }
+            catch
+            {
+                // 2) Fallback: HRP custom (some chains change the HRP and NBitcoin's Network may not match)
+                if (string.IsNullOrWhiteSpace(bechPrefix))
+                    throw; // no custom HRP, nothing we can do
 
-        var decoded = encoder.Decode(address, out var witVersion);
-        var result = new WitKeyId(decoded);
+                var encoder = Encoders.Bech32(bechPrefix);
+                var prog = encoder.Decode(address, out var witVersion);
 
-        Debug.Assert(result.GetAddress(litecoin).ToString() == address);
-        return result;
+                // v0 + 20 bytes -> P2WPKH
+                if (witVersion == 0 && prog?.Length == 20)
+                    return new WitKeyId(prog);
+
+                // v0 + 32 bytes -> P2WSH
+                if (witVersion == 0 && prog?.Length == 32)
+                    return new WitScriptId(prog);
+
+                // v1 + 32 bytes -> Taproot (If your NBitcoin version has Taproot in IDestination,
+                // AddressToDestination already handled it. With custom HRP, we don't force a specific type.)
+
+                // If you REALLY need to support Taproot with custom HRP, consider aligning the Network/HRP.
+
+                throw new FormatException($"Unsupported bech32 witness (v={witVersion}, len={prog?.Length}) for '{address}' (hrp='{bechPrefix}').");
+            }
+        }
+
+        /// <summary>
+        /// Converts a Bitcoin Cash address to IDestination using the altcoin's Network.
+        /// </summary>
+        public static IDestination BCashAddressToDestination(string address, Network expectedNetwork)
+        {
+            if (string.IsNullOrWhiteSpace(address))
+                throw new ArgumentException("address is null/empty", nameof(address));
+            if (expectedNetwork == null)
+                throw new ArgumentNullException(nameof(expectedNetwork));
+
+            var bcash = NBitcoin.Altcoins.BCash.Instance.GetNetwork(expectedNetwork.ChainName);
+            if (bcash == null)
+                throw new ArgumentException($"Unable to resolve BCash network for chain '{expectedNetwork.ChainName}'.");
+
+            var anyAddr = NBitcoin.Altcoins.BCash.Instance.Networks.Main // type is resolved via Parse<T>, but we can use Create
+                .Parse<BitcoinAddress>(address, bcash);
+
+            var dest = anyAddr.ScriptPubKey.GetDestination(bcash);
+            if (dest == null)
+                throw new FormatException($"Unable to derive destination from BCash address '{address}'.");
+
+            return dest;
+        }
+
+        /// <summary>
+        /// Converts a Litecoin address to IDestination using the altcoin's Network.
+        /// Supports base58 and bech32 (ltc...).
+        /// </summary>
+        public static IDestination LitecoinAddressToDestination(string address, Network expectedNetwork)
+        {
+            if (string.IsNullOrWhiteSpace(address))
+                throw new ArgumentException("address is null/empty", nameof(address));
+            if (expectedNetwork == null)
+                throw new ArgumentNullException(nameof(expectedNetwork));
+
+            var ltc = NBitcoin.Altcoins.Litecoin.Instance.GetNetwork(expectedNetwork.ChainName);
+            if (ltc == null)
+                throw new ArgumentException($"Unable to resolve Litecoin network for chain '{expectedNetwork.ChainName}'.");
+
+            var addr = BitcoinAddress.Create(address, ltc);
+            var dest = addr.ScriptPubKey.GetDestination(ltc);
+            if (dest == null)
+                throw new FormatException($"Unable to derive destination from Litecoin address '{address}'.");
+
+            // optional sanity check
+            Debug.Assert(addr.ToString() == address);
+            return dest;
+        }
     }
 }

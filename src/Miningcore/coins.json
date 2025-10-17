@@ -474,6 +474,75 @@
         "explorerTxLink": "https://explorer.btcnickel.com/tx/{0}",
         "explorerAccountLink": "https://explorer.btcnickel.com/address/{0}"
     },
+    "bitcoinz": {
+        "name": "BitcoinZ",
+        "symbol": "BTCZ",
+        "family": "equihash",
+        "algorithm": "equihash",
+        "website": "https://getbtcz.com",
+        "market": "https://coinmarketcap.com/currencies/bitcoinz/",
+        "twitter": "https://x.com/BTCZOfficial",
+        "telegram": "https://t.me/bitcoinzcommunity",
+        "discord": "https://discord.gg/K59mxyf",
+        "networks": {
+            "main": {
+                "diff1": "0007FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+                "solutionSize": 100,
+                "solutionPreambleSize": 1,
+                "solver": {
+                    "hash": "equihash",
+                    "args": [
+                        144,
+                        5,
+                        "BitcoinZ"
+                    ]
+                },
+                "coinbaseTxNetwork": "main",
+                "payFoundersReward": false,
+                "overwinterActivationHeight": 1,
+                "overwinterTxVersion": 3,
+                "overwinterTxVersionGroupId": 63210096,
+                "saplingActivationHeight": 1,
+                "saplingTxVersion": 4,
+                "saplingTxVersionGroupId": 2301567109
+            },
+            "test": {
+                "diff1": "0007FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+                "solutionSize": 100,
+                "solutionPreambleSize": 1,
+                "solver": {
+                    "hash": "equihash",
+                    "args": [
+                        144,
+                        5,
+                        "BitcoinZ"
+                    ]
+                },
+                "coinbaseTxNetwork": "testnet",
+                "payFoundersReward": false
+            },
+            "regtest": {
+                "diff1": "0007FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+                "solutionSize": 100,
+                "solutionPreambleSize": 1,
+                "solver": {
+                    "hash": "equihash",
+                    "args": [
+                        144,
+                        5,
+                        "BitcoinZ"
+                    ]
+                },
+                "coinbaseTxNetwork": "regtest",
+                "payFoundersReward": false
+            }
+        },
+        "usesZCashAddressFormat": true,
+        "useBitcoinPayoutHandler": false,
+        "explorerBlockLink": "https://explorer.btcz.rocks",
+        "explorerTxLink": "https://explorer.btcz.rocks/tx/{0}",
+        "explorerAccountLink": "https://explorer.btcz.rocks/address/{0}"
+    },
     "bitcore": {
         "name": "Bitcore",
         "canonicalName": "Bitcore",
