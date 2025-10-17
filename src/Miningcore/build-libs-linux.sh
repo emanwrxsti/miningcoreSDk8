@@ -43,21 +43,67 @@ export HAVE_FEATURE="$HAVE_AES $HAVE_SSE2 $HAVE_SSE3 $HAVE_SSSE3 $HAVE_PCLMUL $H
 (cd ../Native/libcortexcuckoocycle && make clean && make) && mv ../Native/libcortexcuckoocycle/libcortexcuckoocycle.so "$OutDir"
 (cd ../Native/libprogpowz && make clean && make) && mv ../Native/libprogpowz/libprogpowz.so "$OutDir"
 (cd ../Native/libzanonote && make clean && make) && mv ../Native/libzanonote/libzanonote.so "$OutDir"
+(cd ../Native/libmerakipow && make clean && make) && mv ../Native/libmerakipow/libmerakipow.so "$OutDir"
+(cd ../Native/libphihash && make clean && make) && mv ../Native/libphihash/libphihash.so "$OutDir"
+(cd ../Native/libsccpow && make clean && make) && mv ../Native/libsccpow/libsccpow.so "$OutDir"
 
+# --- BEGIN merged block ---
 
-(cd /tmp && rm -rf secp256k1 && git clone https://github.com/bitcoin-ABC/secp256k1 && cd secp256k1 && git checkout 04fabb44590c10a19e35f044d11eb5058aac65b2 && mkdir build && cd build && cmake -GNinja .. -DCMAKE_C_FLAGS=-fPIC -DSECP256K1_ENABLE_MODULE_RECOVERY=OFF -DSECP256K1_ENABLE_COVERAGE=OFF -DSECP256K1_ENABLE_MODULE_SCHNORR=ON && ninja) && (cd ../Native/libnexapow && cp /tmp/secp256k1/build/libsecp256k1.a . && make clean && make) && mv ../Native/libnexapow/libnexapow.so "$OutDir"
+# secp256k1 (for Nexa) -> libnexapow
+( cd /tmp && rm -rf secp256k1 \
+  && git clone https://github.com/bitcoin-ABC/secp256k1 \
+  && cd secp256k1 \
+  && git checkout 04fabb44590c10a19e35f044d11eb5058aac65b2 \
+  && mkdir build && cd build \
+  && cmake -GNinja .. -DCMAKE_C_FLAGS=-fPIC -DSECP256K1_ENABLE_MODULE_RECOVERY=OFF -DSECP256K1_ENABLE_COVERAGE=OFF -DSECP256K1_ENABLE_MODULE_SCHNORR=ON \
+  && ninja ) \
+&& ( cd ../Native/libnexapow && cp /tmp/secp256k1/build/libsecp256k1.a . && make clean && make ) \
+&& mv ../Native/libnexapow/libnexapow.so "$OutDir"
 
-(cd /tmp && rm -rf RandomX && git clone https://github.com/tevador/RandomX && cd RandomX && git checkout tags/v1.2.1 && mkdir build && cd build && cmake -DARCH=native -DCMAKE_C_FLAGS=-Wa,--noexecstack -DCMAKE_CXX_FLAGS=-Wa,--noexecstack .. && make) && (cd ../Native/librandomx && cp /tmp/RandomX/build/librandomx.a . && make clean && make) && mv ../Native/librandomx/librandomx.so "$OutDir"
+# RandomX -> librandomx
+( cd /tmp && rm -rf RandomX \
+  && git clone https://github.com/tevador/RandomX \
+  && cd RandomX && git checkout tags/v1.2.1 \
+  && mkdir build && cd build \
+  && cmake -DARCH=native -DCMAKE_C_FLAGS=-Wa,--noexecstack -DCMAKE_CXX_FLAGS=-Wa,--noexecstack .. \
+  && make ) \
+&& ( cd ../Native/librandomx && cp /tmp/RandomX/build/librandomx.a . && make clean && make ) \
+&& mv ../Native/librandomx/librandomx.so "$OutDir"
 
-(cd /tmp && rm -rf RandomARQ && git clone https://github.com/arqma/RandomARQ && cd RandomARQ && git checkout 3bcb6bafe63d70f8e6f78a0d431e71be2b638083 && \
+# RandomARQ (with stdint.h patch) -> librandomarq
+( cd /tmp && rm -rf RandomARQ \
+  && git clone https://github.com/arqma/RandomARQ \
+  && cd RandomARQ && git checkout 3bcb6bafe63d70f8e6f78a0d431e71be2b638083 \
+  # 🩹 Inject stdint.h fix into utility.hpp to avoid uint64_t errors
+  && UTILITY_HEADER="src/tests/utility.hpp" \
+  && if [ -f "$UTILITY_HEADER" ]; then \
+       echo "Patching RandomARQ utility.hpp to add <stdint.h>"; \
+       grep -q "stdint.h" "$UTILITY_HEADER" || sed -i '1i#include <stdint.h>' "$UTILITY_HEADER"; \
+     fi \
+  && mkdir build && cd build \
+  && cmake -DARCH=native -DCMAKE_C_FLAGS=-Wa,--noexecstack -DCMAKE_CXX_FLAGS=-Wa,--noexecstack .. \
+  && make ) \
+&& ( cd ../Native/librandomarq && cp /tmp/RandomARQ/build/librandomx.a . && make clean && make ) \
+&& mv ../Native/librandomarq/librandomarq.so "$OutDir"
 
-# CHANGES 2: added the following lines of code
-# 🩹 Inject stdint.h fix into utility.hpp to avoid uint64_t errors
-  UTILITY_HEADER="src/tests/utility.hpp"
-  if [ -f "$UTILITY_HEADER" ]; then
-    echo "🔧 Patching RandomARQ utility.hpp to add <stdint.h>"
-    grep -q "stdint.h" "$UTILITY_HEADER" || sed -i '1i#include <stdint.h>' "$UTILITY_HEADER"
-  fi
-# END CHANGES 2
+# Panthera -> libpanthera
+( cd /tmp && rm -rf Panthera \
+  && git clone https://github.com/scala-network/Panthera \
+  && cd Panthera && git checkout cc7425f468d935ba328fba5bbb05f8227f4f22d7 \
+  && mkdir build && cd build \
+  && cmake -DARCH=native -DCMAKE_C_FLAGS=-Wa,--noexecstack -DCMAKE_CXX_FLAGS=-Wa,--noexecstack .. \
+  && make ) \
+&& ( cd ../Native/libpanthera && cp /tmp/Panthera/build/librandomx.a . && make clean && make ) \
+&& mv ../Native/libpanthera/libpanthera.so "$OutDir"
 
-mkdir build && cd build && cmake -DARCH=native -DCMAKE_C_FLAGS=-Wa,--noexecstack -DCMAKE_CXX_FLAGS=-Wa,--noexecstack .. && make) && (cd ../Native/librandomarq && cp /tmp/RandomARQ/build/librandomx.a . && make clean && make) && mv ../Native/librandomarq/librandomarq.so "$OutDir"
+# RandomXSCash -> librandomxscash
+( cd /tmp && rm -rf RandomXSCash \
+  && git clone https://github.com/scashnetwork/RandomX RandomXSCash \
+  && cd RandomXSCash && git checkout 0b3e0ded68b95491516fe974e3db784ca2742ca7 \
+  && mkdir build && cd build \
+  && cmake -DARCH=native -DCMAKE_C_FLAGS=-Wa,--noexecstack -DCMAKE_CXX_FLAGS=-Wa,--noexecstack .. \
+  && make ) \
+&& ( cd ../Native/librandomxscash && cp /tmp/RandomXSCash/build/librandomx.a . && make clean && make ) \
+&& mv ../Native/librandomxscash/librandomxscash.so "$OutDir"
+
+# --- END merged block ---

@@ -33,30 +33,28 @@ public class ApiCoinConfig
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string Telegram { get; set; }
 
-    // ✅ new: optional Github link
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string Github { get; set; }
 
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string CanonicalName { get; set; }
 }
 
-// Strongly-typed payout-scheme configuration exposed to API consumers
 public class ApiPoolPayoutSchemeConfig
 {
-    // For PPLNS: “2.0” is a common default factor
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public decimal? Factor { get; set; } = 2.0m;
 
-    // Only relevant for PPLNSBF; controllers set this to null when scheme != PPLNSBF
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public decimal? BlockFinderPercentage { get; set; } = 5.0m;
 }
 
-// Pool payment processing configuration (public view)
 public class ApiPoolPaymentProcessingConfig
 {
     public bool Enabled { get; set; }
+    public decimal MinimumPayment { get; set; } // in pool-base-currency (ie. Bitcoin, not Satoshis)
+    public string PayoutScheme { get; set; }
+    public ApiPoolPayoutSchemeConfig PayoutSchemeConfig { get; set; }
 
     // In pool base currency (e.g. BTC, not sats)
     public decimal MinimumPayment { get; set; }

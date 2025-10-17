@@ -87,7 +87,13 @@ public class PoolApiController : ApiControllerBase
                 var lastBlockTime = await cf.Run(con => blocksRepo.GetLastPoolBlockTimeAsync(con, config.Id, ct));
                 result.LastPoolBlockTime = lastBlockTime;
 
-                if (lastBlockTime.HasValue)
+                var payoutConfig = config.PaymentProcessing;
+                result.PaymentProcessing.PayoutSchemeConfig = payoutConfig?.PayoutSchemeConfig.ToObject<ApiPoolPayoutSchemeConfig>();
+                // display block finder percentage only if PPLNSBF is activated
+                if(payoutConfig?.PayoutScheme != PayoutScheme.PPLNSBF)
+                    result.PaymentProcessing.PayoutSchemeConfig.BlockFinderPercentage = null;
+
+                if(lastBlockTime.HasValue)
                 {
                     // Use live pool's ShareMultiplier if present, else 1.0
                     var shareMultiplier = pool?.ShareMultiplier ?? 1d;
@@ -167,9 +173,13 @@ public class PoolApiController : ApiControllerBase
         var lastBlockTime = await cf.Run(con => blocksRepo.GetLastPoolBlockTimeAsync(con, poolCfg.Id, ct));
         response.Pool.LastPoolBlockTime = lastBlockTime;
 
-        // Expose payout-scheme config (and hide BF% when not PPLNSBF)
-        var payoutConfig = poolCfg.PaymentProcessing;
-        if (response.Pool?.PaymentProcessing != null && payoutConfig?.PayoutSchemeConfig != null)
+        var payoutConfig = pool.PaymentProcessing;
+        response.Pool.PaymentProcessing.PayoutSchemeConfig = payoutConfig?.PayoutSchemeConfig.ToObject<ApiPoolPayoutSchemeConfig>();
+        // display block finder percentage only if PPLNSBF is activated
+        if(payoutConfig?.PayoutScheme != PayoutScheme.PPLNSBF)
+            response.Pool.PaymentProcessing.PayoutSchemeConfig.BlockFinderPercentage = null;
+
+        if(lastBlockTime.HasValue)
         {
             response.Pool.PaymentProcessing.PayoutSchemeConfig =
                 payoutConfig.PayoutSchemeConfig.ToObject<ApiPoolPayoutSchemeConfig>();
