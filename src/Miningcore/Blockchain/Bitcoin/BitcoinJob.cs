@@ -19,6 +19,9 @@ namespace Miningcore.Blockchain.Bitcoin;
 
 public class BitcoinJob
 {
+    // Logger must be inside the class (file-scoped namespace disallows members before it)
+    private static readonly NLog.ILogger logger = NLog.LogManager.GetCurrentClassLogger();
+
     protected IHashAlgorithm blockHasher;
     protected IMasterClock clock;
     protected IHashAlgorithm coinbaseHasher;
@@ -57,7 +60,7 @@ public class BitcoinJob
     protected uint txVersion = 1u; // transaction version (currently 1) - see https://en.bitcoin.it/wiki/Transaction
 
     protected static uint txInputCount = 1u;
-    protected static uint txInPrevOutIndex = (uint)(Math.Pow(2, 32) - 1);
+    protected static uint txInPrevOutIndex = (uint) (Math.Pow(2, 32) - 1);
     protected static uint txInSequence;
     protected static uint txLockTime;
 
@@ -82,7 +85,7 @@ public class BitcoinJob
         var sigScriptInitial = GenerateScriptSigInitial();
         var sigScriptInitialBytes = sigScriptInitial.ToBytes();
 
-        var sigScriptLength = (uint)(
+        var sigScriptLength = (uint) (
             sigScriptInitial.Length +
             extraNoncePlaceHolderLength +
             scriptSigFinalBytes.Length);
@@ -91,7 +94,7 @@ public class BitcoinJob
         txOut = CreateOutputTransaction();
 
         // build coinbase initial
-        using (var stream = new MemoryStream())
+        using(var stream = new MemoryStream())
         {
             var bs = new BitcoinStream(stream, true);
 
@@ -99,7 +102,7 @@ public class BitcoinJob
             bs.ReadWrite(ref txVersion);
 
             // timestamp for POS coins
-            if (isPoS)
+            if(isPoS)
             {
                 var timestamp = BlockTemplate.CurTime;
                 bs.ReadWrite(ref timestamp);
@@ -120,7 +123,7 @@ public class BitcoinJob
         }
 
         // build coinbase final
-        using (var stream = new MemoryStream())
+        using(var stream = new MemoryStream())
         {
             var bs = new BitcoinStream(stream, true);
 
@@ -148,13 +151,13 @@ public class BitcoinJob
 
     protected virtual void AppendCoinbaseFinal(BitcoinStream bs)
     {
-        if (!string.IsNullOrEmpty(txComment))
+        if(!string.IsNullOrEmpty(txComment))
         {
             var data = Encoding.ASCII.GetBytes(txComment);
             bs.ReadWriteAsVarString(ref data);
         }
 
-        if (coin.HasMasterNodes && !string.IsNullOrEmpty(masterNodeParameters.CoinbasePayload))
+        if(coin.HasMasterNodes && !string.IsNullOrEmpty(masterNodeParameters.CoinbasePayload))
         {
             var data = masterNodeParameters.CoinbasePayload.HexToByteArray();
             bs.ReadWriteAsVarString(ref data);
@@ -165,11 +168,11 @@ public class BitcoinJob
     {
         var withDefaultWitnessCommitment = !string.IsNullOrEmpty(BlockTemplate.DefaultWitnessCommitment);
 
-        var outputCount = (uint)tx.Outputs.Count;
-        if (withDefaultWitnessCommitment)
+        var outputCount = (uint) tx.Outputs.Count;
+        if(withDefaultWitnessCommitment)
             outputCount++;
 
-        using (var stream = new MemoryStream())
+        using(var stream = new MemoryStream())
         {
             var bs = new BitcoinStream(stream, true);
 
@@ -181,11 +184,11 @@ public class BitcoinJob
             uint rawLength;
 
             // serialize witness (segwit)
-            if (withDefaultWitnessCommitment)
+            if(withDefaultWitnessCommitment)
             {
                 amount = 0;
                 raw = BlockTemplate.DefaultWitnessCommitment.HexToByteArray();
-                rawLength = (uint)raw.Length;
+                rawLength = (uint) raw.Length;
 
                 bs.ReadWrite(ref amount);
                 bs.ReadWriteAsVarInt(ref rawLength);
@@ -193,12 +196,12 @@ public class BitcoinJob
             }
 
             // serialize outputs
-            foreach (var output in tx.Outputs)
+            foreach(var output in tx.Outputs)
             {
                 amount = output.Value.Satoshi;
                 var outScript = output.ScriptPubKey;
                 raw = outScript.ToBytes(true);
-                rawLength = (uint)raw.Length;
+                rawLength = (uint) raw.Length;
 
                 bs.ReadWrite(ref amount);
                 bs.ReadWriteAsVarInt(ref rawLength);
@@ -211,7 +214,7 @@ public class BitcoinJob
 
     protected virtual Script GenerateScriptSigInitial()
     {
-        var now = ((DateTimeOffset)clock.Now).ToUnixTimeSeconds();
+        var now = ((DateTimeOffset) clock.Now).ToUnixTimeSeconds();
 
         // script ops
         var ops = new List<Op>();
@@ -220,7 +223,7 @@ public class BitcoinJob
         ops.Add(Op.GetPushOp(BlockTemplate.Height));
 
         // optionally push aux-flags
-        if (!coin.CoinbaseIgnoreAuxFlags && !string.IsNullOrEmpty(BlockTemplate.CoinbaseAux?.Flags))
+        if(!coin.CoinbaseIgnoreAuxFlags && !string.IsNullOrEmpty(BlockTemplate.CoinbaseAux?.Flags))
             ops.Add(Op.GetPushOp(BlockTemplate.CoinbaseAux.Flags.HexToByteArray()));
 
         // push timestamp
@@ -237,55 +240,54 @@ public class BitcoinJob
         rewardToPool = new Money(BlockTemplate.CoinbaseValue, MoneyUnit.Satoshi);
         var tx = Transaction.Create(network);
 
-        if (coin.HasPayee)
+        if(coin.HasPayee)
             rewardToPool = CreatePayeeOutput(tx, rewardToPool);
 
-        if (coin.HasMasterNodes)
+        if(coin.HasMasterNodes)
             rewardToPool = CreateMasternodeOutputs(tx, rewardToPool);
 
-        if (coin.HasFounderFee)
+        if(coin.HasFounderFee)
             rewardToPool = CreateFounderOutputs(tx, rewardToPool);
 
-        if (coin.HasFortuneReward)
+        if(coin.HasFortuneReward)
             rewardToPool = CreateFortuneOutputs(tx, rewardToPool);
 
-        if (coin.HasMinerFund)
+        if(coin.HasMinerFund)
             rewardToPool = CreateMinerFundOutputs(tx, rewardToPool);
 
-        if (coin.HasCommunityAddress)
+        if(coin.HasCommunityAddress)
             rewardToPool = CreateCommunityAddressOutputs(tx, rewardToPool);
 
-        if (coin.HasCoinbaseDevReward)
+        if(coin.HasCoinbaseDevReward)
             rewardToPool = CreateCoinbaseDevRewardOutputs(tx, rewardToPool);
 
-        if (coin.HasCoinbaseStakingReward)
+        if(coin.HasCoinbaseStakingReward)
             rewardToPool = CreateCoinbaseStakingRewardOutputs(tx, rewardToPool);
 
         // extras brought from another patch (with fix)
-        if (coin.HasCommunity)
+        if(coin.HasCommunity)
             rewardToPool = CreateCommunityOutputs(tx, rewardToPool);
 
-        if (coin.HasDataMining)
+        if(coin.HasDataMining)
             rewardToPool = CreateDataMiningOutputs(tx, rewardToPool);
 
-        if (coin.HasDeveloper)
+        if(coin.HasDeveloper)
             rewardToPool = CreateDeveloperOutputs(tx, rewardToPool);
 
-        // === Guard: do not let negative reward ===
-        if (rewardToPool < Money.Zero)
+        // Guard: do not let negative reward
+        if(rewardToPool < Money.Zero)
             throw new InvalidOperationException("Coinbase over-allocated: outputs exceed subsidy+fees");
 
         // Remaining amount goes to the pool (if > 0)
-        if (rewardToPool > Money.Zero)
+        if(rewardToPool > Money.Zero)
             tx.Outputs.Add(rewardToPool, poolAddressDestination);
 
         return tx;
     }
 
-
     protected virtual Money CreatePayeeOutput(Transaction tx, Money reward)
     {
-        if (payeeParameters?.PayeeAmount != null && payeeParameters.PayeeAmount.Value > 0)
+        if(payeeParameters?.PayeeAmount != null && payeeParameters.PayeeAmount.Value > 0)
         {
             var payeeReward = new Money(payeeParameters.PayeeAmount.Value, MoneyUnit.Satoshi);
             reward -= payeeReward;
@@ -299,7 +301,7 @@ public class BitcoinJob
     protected bool RegisterSubmit(string extraNonce1, string extraNonce2, string nTime, string nonce)
     {
         var key = new StringBuilder()
-            .Append(extraNonce1) // normally already fixed-case
+            .Append(extraNonce1)
             .Append(extraNonce2?.ToLowerInvariant())
             .Append(nTime?.ToLowerInvariant())
             .Append(nonce?.ToLowerInvariant())
@@ -317,14 +319,14 @@ public class BitcoinJob
         var version = BlockTemplate.Version;
 
         // Overt-ASIC boost
-        if (versionMask.HasValue && versionBits.HasValue)
+        if(versionMask.HasValue && versionBits.HasValue)
             version = (version & ~versionMask.Value) | (versionBits.Value & versionMask.Value);
 
 #pragma warning disable 618
         var blockHeader = new BlockHeader
 #pragma warning restore 618
         {
-            Version = unchecked((int)version),
+            Version = unchecked((int) version),
             Bits = new Target(Encoders.Hex.DecodeData(BlockTemplate.Bits)),
             HashPrevBlock = uint256.Parse(BlockTemplate.PreviousBlockhash),
             HashMerkleRoot = new uint256(merkleRoot),
@@ -349,32 +351,30 @@ public class BitcoinJob
         // hash block-header
         var headerBytes = SerializeHeader(coinbaseHash, nTime, nonce, context.VersionRollingMask, versionBits);
         Span<byte> headerHash = stackalloc byte[32];
-        headerHasher.Digest(headerBytes, headerHash, (ulong)nTime, BlockTemplate, coin, networkParams);
+        headerHasher.Digest(headerBytes, headerHash, (ulong) nTime, BlockTemplate, coin, networkParams);
         var headerValue = new uint256(headerHash);
 
         // calc share-diff
-        var shareDiff = (double)new BigRational(BitcoinConstants.Diff1, headerHash.ToBigInteger()) * shareMultiplier;
+        var shareDiff = (double) new BigRational(BitcoinConstants.Diff1, headerHash.ToBigInteger()) * shareMultiplier;
         var stratumDifficulty = context.Difficulty;
         var ratio = shareDiff / stratumDifficulty;
 
         // check if the share meets the much harder block difficulty (block candidate)
         var isBlockCandidate = headerValue <= blockTargetValue;
 
-        // test if share meets at least workers current difficulty
-        if (!isBlockCandidate && ratio < 0.99)
+        // test if the share meets at least workers current difficulty
+        if(!isBlockCandidate && ratio < 0.99)
         {
-            // check if share matched the previous difficulty from before a vardiff retarget
-            if (context.VarDiff?.LastUpdate != null && context.PreviousDifficulty.HasValue)
+            if(context.VarDiff?.LastUpdate != null && context.PreviousDifficulty.HasValue)
             {
                 ratio = shareDiff / context.PreviousDifficulty.Value;
 
-                if (ratio < 0.99)
+                if(ratio < 0.99)
                     throw new StratumException(StratumError.LowDifficultyShare, $"low difficulty share ({shareDiff})");
 
                 // use previous difficulty
                 stratumDifficulty = context.PreviousDifficulty.Value;
             }
-
             else
                 throw new StratumException(StratumError.LowDifficultyShare, $"low difficulty share ({shareDiff})");
         }
@@ -386,7 +386,7 @@ public class BitcoinJob
             Difficulty = stratumDifficulty / shareMultiplier,
         };
 
-        if (isBlockCandidate)
+        if(isBlockCandidate)
         {
             result.IsBlockCandidate = true;
 
@@ -408,7 +408,7 @@ public class BitcoinJob
         var extraNonce1Bytes = extraNonce1.HexToByteArray();
         var extraNonce2Bytes = extraNonce2.HexToByteArray();
 
-        using (var stream = new MemoryStream())
+        using(var stream = new MemoryStream())
         {
             stream.Write(coinbaseInitial);
             stream.Write(extraNonce1Bytes);
@@ -422,9 +422,9 @@ public class BitcoinJob
     protected virtual byte[] SerializeBlock(byte[] header, byte[] coinbase)
     {
         var rawTransactionBuffer = BuildRawTransactionBuffer();
-        var transactionCount = (uint)BlockTemplate.Transactions.Length + 1; // +1 for prepended coinbase tx
+        var transactionCount = (uint) BlockTemplate.Transactions.Length + 1; // +1 for prepended coinbase tx
 
-        using (var stream = new MemoryStream())
+        using(var stream = new MemoryStream())
         {
             var bs = new BitcoinStream(stream, true);
 
@@ -435,12 +435,11 @@ public class BitcoinJob
             bs.ReadWrite(rawTransactionBuffer);
 
             // POS coins require a zero byte appended to block which the daemon replaces with the signature
-            if (isPoS)
-                bs.ReadWrite((byte)0);
+            if(isPoS)
+                bs.ReadWrite((byte) 0);
 
-            // if pool supports MWEB, we have to append the MWEB data to the block
-            // https://github.com/litecoin-project/litecoin/blob/0.21/doc/mweb/mining-changes.md
-            if (coin.HasMWEB)
+            // MWEB appendix (Litecoin)
+            if(coin.HasMWEB)
             {
                 var separator = new byte[] { 0x01 };
                 var mweb = BlockTemplate.Extra.SafeExtensionDataAs<MwebBlockTemplateExtra>();
@@ -456,9 +455,9 @@ public class BitcoinJob
 
     protected virtual byte[] BuildRawTransactionBuffer()
     {
-        using (var stream = new MemoryStream())
+        using(var stream = new MemoryStream())
         {
-            foreach (var tx in BlockTemplate.Transactions)
+            foreach(var tx in BlockTemplate.Transactions)
             {
                 var txRaw = tx.Data.HexToByteArray();
                 stream.Write(txRaw);
@@ -474,21 +473,21 @@ public class BitcoinJob
 
     protected virtual Money CreateMasternodeOutputs(Transaction tx, Money reward)
     {
-        if (masterNodeParameters.Masternode != null)
+        if(masterNodeParameters.Masternode != null)
         {
             Masternode[] masternodes;
 
             // Dash v13 Multi-Master-Nodes
-            if (masterNodeParameters.Masternode.Type == JTokenType.Array)
+            if(masterNodeParameters.Masternode.Type == JTokenType.Array)
                 masternodes = masterNodeParameters.Masternode.ToObject<Masternode[]>();
             else
                 masternodes = new[] { masterNodeParameters.Masternode.ToObject<Masternode>() };
 
-            if (masternodes != null)
+            if(masternodes != null)
             {
-                foreach (var masterNode in masternodes)
+                foreach(var masterNode in masternodes)
                 {
-                    if (!string.IsNullOrEmpty(masterNode.Payee))
+                    if(!string.IsNullOrEmpty(masterNode.Payee))
                     {
                         var payeeDestination = BitcoinUtils.AddressToDestination(masterNode.Payee, network);
                         var payeeReward = masterNode.Amount;
@@ -500,9 +499,9 @@ public class BitcoinJob
             }
         }
 
-        if (masterNodeParameters.SuperBlocks is { Length: > 0 })
+        if(masterNodeParameters.SuperBlocks is { Length: > 0 })
         {
-            foreach (var superBlock in masterNodeParameters.SuperBlocks)
+            foreach(var superBlock in masterNodeParameters.SuperBlocks)
             {
                 var payeeAddress = BitcoinUtils.AddressToDestination(superBlock.Payee, network);
                 var payeeReward = superBlock.Amount;
@@ -512,7 +511,7 @@ public class BitcoinJob
             }
         }
 
-        if (!coin.HasPayee && !string.IsNullOrEmpty(masterNodeParameters.Payee))
+        if(!coin.HasPayee && !string.IsNullOrEmpty(masterNodeParameters.Payee))
         {
             var payeeAddress = BitcoinUtils.AddressToDestination(masterNodeParameters.Payee, network);
             var payeeReward = masterNodeParameters.PayeeAmount;
@@ -532,19 +531,19 @@ public class BitcoinJob
 
     protected virtual Money CreateFortuneOutputs(Transaction tx, Money reward)
     {
-        if (fortuneParameters.Fortune != null)
+        if(fortuneParameters.Fortune != null)
         {
             Fortune[] fortunes;
-            if (fortuneParameters.Fortune.Type == JTokenType.Array)
+            if(fortuneParameters.Fortune.Type == JTokenType.Array)
                 fortunes = fortuneParameters.Fortune.ToObject<Fortune[]>();
             else
                 fortunes = new[] { fortuneParameters.Fortune.ToObject<Fortune>() };
 
-            if (fortunes != null)
+            if(fortunes != null)
             {
-                foreach (var Fortune in fortunes)
+                foreach(var Fortune in fortunes)
                 {
-                    if (!string.IsNullOrEmpty(Fortune.Payee))
+                    if(!string.IsNullOrEmpty(Fortune.Payee))
                     {
                         var payeeAddress = BitcoinUtils.AddressToDestination(Fortune.Payee, network);
                         var payeeReward = Fortune.Amount;
@@ -567,19 +566,19 @@ public class BitcoinJob
 
     protected virtual Money CreateFounderOutputs(Transaction tx, Money reward)
     {
-        if (founderParameters.Founder != null)
+        if(founderParameters.Founder != null)
         {
             Founder[] founders;
-            if (founderParameters.Founder.Type == JTokenType.Array)
+            if(founderParameters.Founder.Type == JTokenType.Array)
                 founders = founderParameters.Founder.ToObject<Founder[]>();
             else
                 founders = new[] { founderParameters.Founder.ToObject<Founder>() };
 
-            if (founders != null)
+            if(founders != null)
             {
-                foreach (var Founder in founders)
+                foreach(var Founder in founders)
                 {
-                    if (!string.IsNullOrEmpty(Founder.Payee))
+                    if(!string.IsNullOrEmpty(Founder.Payee))
                     {
                         var payeeAddress = BitcoinUtils.AddressToDestination(Founder.Payee, network);
                         var payeeReward = Founder.Amount;
@@ -602,7 +601,7 @@ public class BitcoinJob
 
     protected virtual Money CreateMinerFundOutputs(Transaction tx, Money reward)
     {
-        if (!string.IsNullOrEmpty(minerFundParameters.Addresses?.FirstOrDefault()))
+        if(!string.IsNullOrEmpty(minerFundParameters.Addresses?.FirstOrDefault()))
         {
             var payeeReward = minerFundParameters.MinimumValue;
 
@@ -623,13 +622,13 @@ public class BitcoinJob
         var value = BlockTemplate.CommunityAutonomousValue;
         var addr = BlockTemplate.CommunityAutonomousAddress;
 
-        if (value > 0 && !string.IsNullOrEmpty(addr))
+        if(value > 0 && !string.IsNullOrEmpty(addr))
         {
             var payeeReward = value;
             var payeeAddress = BitcoinUtils.AddressToDestination(addr, network);
 
             tx.Outputs.Add(payeeReward, payeeAddress);
-            reward -= payeeReward;   // <-- DISCOUNT
+            reward -= payeeReward;
         }
 
         return reward;
@@ -643,35 +642,35 @@ public class BitcoinJob
 
     protected virtual Money CreateCoinbaseDevRewardOutputs(Transaction tx, Money reward)
     {
-        if (CoinbaseDevRewardParams?.CoinbaseDevReward != null)
+        if(CoinbaseDevRewardParams?.CoinbaseDevReward != null)
         {
             var items = new[] { CoinbaseDevRewardParams.CoinbaseDevReward.ToObject<CoinbaseDevReward>() };
 
-            foreach (var it in items)
+            foreach(var it in items)
             {
-                if (it == null || string.IsNullOrEmpty(it.ScriptPubkey))
+                if(it == null || string.IsNullOrEmpty(it.ScriptPubkey))
                     continue;
 
                 try
                 {
                     var spk = new Script(it.ScriptPubkey.HexToByteArray());
                     var pay = it.Value;
-                    if (pay <= Money.Zero) continue;
+                    if(pay <= Money.Zero)
+                        continue;
 
                     tx.Outputs.Add(pay, spk);
-                    reward -= pay;   // <-- DISCOUNT
+                    reward -= pay;
                 }
                 catch
                 {
-                    // optional: log warning about script
-                    logger?.Warning(() => $"CoinbaseDevReward: invalid script {it.ScriptPubkey}");
+                    // invalid script: ignore
+                    logger?.Warn(() => $"CoinbaseDevReward: invalid script {it.ScriptPubkey}");
                 }
             }
         }
 
         return reward;
     }
-
 
     #endregion // CoinbaseDevReward
 
@@ -681,7 +680,7 @@ public class BitcoinJob
 
     protected virtual Money CreateCoinbaseStakingRewardOutputs(Transaction tx, Money reward)
     {
-        if (!string.IsNullOrEmpty(coinbaseStakingRewardParameters.PayoutScript?.ScriptPubkey))
+        if(!string.IsNullOrEmpty(coinbaseStakingRewardParameters.PayoutScript?.ScriptPubkey))
         {
             Script payeeAddress = new Script(coinbaseStakingRewardParameters.PayoutScript.ScriptPubkey.HexToByteArray());
             var payeeReward = coinbaseStakingRewardParameters.MinimumValue;
@@ -699,15 +698,12 @@ public class BitcoinJob
 
     protected virtual Money CreateCommunityOutputs(Transaction tx, Money reward)
     {
-        if (communityParameters?.Community != null)
+        var list = communityParameters?.Community;
+        if(list != null)
         {
-            var items = communityParameters.Community.Type == JTokenType.Array
-                ? communityParameters.Community.ToObject<Community[]>()
-                : new[] { communityParameters.Community.ToObject<Community>() };
-
-            foreach (var c in items ?? Array.Empty<Community>())
+            foreach(var c in list)
             {
-                if (string.IsNullOrEmpty(c.Script) || c.Amount <= Money.Zero)
+                if(string.IsNullOrEmpty(c.Script) || c.Amount <= Money.Zero)
                     continue;
 
                 try
@@ -718,8 +714,7 @@ public class BitcoinJob
                 }
                 catch
                 {
-                    // optional: log warning
-                    logger?.Warning(() => $"Community: invalid script {c.Script}");
+                    // ignore
                 }
             }
         }
@@ -735,26 +730,23 @@ public class BitcoinJob
 
     protected virtual Money CreateDataMiningOutputs(Transaction tx, Money reward)
     {
-        if (dataminingParameters?.DataMining != null)
+        var list = dataminingParameters?.DataMining;
+        if(list != null)
         {
-            DataMining[] dataminings;
-            if (dataminingParameters.DataMining.Type == JTokenType.Array)
-                dataminings = dataminingParameters.DataMining.ToObject<DataMining[]>();
-            else
-                dataminings = new[] { dataminingParameters.DataMining.ToObject<DataMining>() };
-
-            if (dataminings != null)
+            foreach(var d in list)
             {
-                foreach (var d in dataminings)
-                {
-                    if (!string.IsNullOrEmpty(d.Script))
-                    {
-                        Script payeeAddress = new(d.Script.HexToByteArray());
-                        var payeeReward = d.Amount;
+                if(string.IsNullOrEmpty(d.Script) || d.Amount <= Money.Zero)
+                    continue;
 
-                        tx.Outputs.Add(payeeReward, payeeAddress);
-                        reward -= payeeReward; // FIX: descontar do reward
-                    }
+                try
+                {
+                    var spk = new Script(d.Script.HexToByteArray());
+                    tx.Outputs.Add(d.Amount, spk);
+                    reward -= d.Amount;
+                }
+                catch
+                {
+                    // ignore
                 }
             }
         }
@@ -770,15 +762,12 @@ public class BitcoinJob
 
     protected virtual Money CreateDeveloperOutputs(Transaction tx, Money reward)
     {
-        if (developerParameters?.Developer != null)
+        var list = developerParameters?.Developer;
+        if(list != null)
         {
-            var items = developerParameters.Developer.Type == JTokenType.Array
-                ? developerParameters.Developer.ToObject<Developer[]>()
-                : new[] { developerParameters.Developer.ToObject<Developer>() };
-
-            foreach (var d in items ?? Array.Empty<Developer>())
+            foreach(var d in list)
             {
-                if (string.IsNullOrEmpty(d.Script) || d.Amount <= Money.Zero)
+                if(string.IsNullOrEmpty(d.Script) || d.Amount <= Money.Zero)
                     continue;
 
                 try
@@ -789,8 +778,7 @@ public class BitcoinJob
                 }
                 catch
                 {
-                    // optional: log warning
-                    logger?.Warning(() => $"Developer: invalid script {d.Script}");
+                    // ignore
                 }
             }
         }
@@ -847,19 +835,19 @@ public class BitcoinJob
         txComment = !string.IsNullOrEmpty(extraPoolConfig?.CoinbaseTxComment) ?
             extraPoolConfig.CoinbaseTxComment : coin.CoinbaseTxComment;
 
-        if (coin.HasMasterNodes)
+        if(coin.HasMasterNodes)
         {
             masterNodeParameters = BlockTemplate.Extra.SafeExtensionDataAs<MasterNodeBlockTemplateExtra>();
 
-            if (coin.HasSmartNodes)
+            if(coin.HasSmartNodes)
             {
-                if (masterNodeParameters.Extra?.ContainsKey("smartnode") == true)
+                if(masterNodeParameters.Extra?.ContainsKey("smartnode") == true)
                 {
                     masterNodeParameters.Masternode = JToken.FromObject(masterNodeParameters.Extra["smartnode"]);
                 }
             }
 
-            if (!string.IsNullOrEmpty(masterNodeParameters.CoinbasePayload))
+            if(!string.IsNullOrEmpty(masterNodeParameters.CoinbasePayload))
             {
                 txVersion = 3;
                 const uint txType = 5;
@@ -867,39 +855,39 @@ public class BitcoinJob
             }
         }
 
-        if (coin.HasPayee)
+        if(coin.HasPayee)
             payeeParameters = BlockTemplate.Extra.SafeExtensionDataAs<PayeeBlockTemplateExtra>();
 
-        if (coin.HasFounderFee)
+        if(coin.HasFounderFee)
             founderParameters = BlockTemplate.Extra.SafeExtensionDataAs<FounderBlockTemplateExtra>();
 
-        if (coin.HasFortuneReward)
+        if(coin.HasFortuneReward)
             fortuneParameters = BlockTemplate.Extra.SafeExtensionDataAs<FortuneBlockTemplateExtra>();
 
-        if (coin.HasMinerFund)
+        if(coin.HasMinerFund)
             minerFundParameters = BlockTemplate.Extra.SafeExtensionDataAs<MinerFundTemplateExtra>("coinbasetxn", "minerfund");
 
-        if (coin.HasCoinbaseDevReward)
+        if(coin.HasCoinbaseDevReward)
             CoinbaseDevRewardParams = BlockTemplate.Extra.SafeExtensionDataAs<CoinbaseDevRewardTemplateExtra>();
 
-        if (coin.HasCoinbaseStakingReward)
+        if(coin.HasCoinbaseStakingReward)
             coinbaseStakingRewardParameters = BlockTemplate.Extra.SafeExtensionDataAs<CoinbaseStakingRewardTemplateExtra>("coinbasetxn", "stakingrewards");
 
         // extras
-        if (coin.HasCommunity)
+        if(coin.HasCommunity)
             communityParameters = BlockTemplate.Extra.SafeExtensionDataAs<CommunityBlockTemplateExtra>();
 
-        if (coin.HasDataMining)
+        if(coin.HasDataMining)
             dataminingParameters = BlockTemplate.Extra.SafeExtensionDataAs<DataMiningBlockTemplateExtra>();
 
-        if (coin.HasDeveloper)
+        if(coin.HasDeveloper)
             developerParameters = BlockTemplate.Extra.SafeExtensionDataAs<DeveloperBlockTemplateExtra>();
 
         this.coinbaseHasher = coinbaseHasher;
         this.headerHasher = headerHasher;
         this.blockHasher = blockHasher;
 
-        if (!string.IsNullOrEmpty(BlockTemplate.Target))
+        if(!string.IsNullOrEmpty(BlockTemplate.Target))
             blockTargetValue = new uint256(BlockTemplate.Target);
         else
         {
@@ -946,15 +934,15 @@ public class BitcoinJob
         var context = worker.ContextAs<BitcoinWorkerContext>();
 
         // validate nTime
-        if (nTime.Length != 8)
+        if(nTime.Length != 8)
             throw new StratumException(StratumError.Other, "incorrect size of ntime");
 
         var nTimeInt = uint.Parse(nTime, NumberStyles.HexNumber);
-        if (nTimeInt < BlockTemplate.CurTime || nTimeInt > ((DateTimeOffset)clock.Now).ToUnixTimeSeconds() + 7200)
+        if(nTimeInt < BlockTemplate.CurTime || nTimeInt > ((DateTimeOffset) clock.Now).ToUnixTimeSeconds() + 7200)
             throw new StratumException(StratumError.Other, "ntime out of range");
 
         // validate nonce
-        if (nonce.Length != 8)
+        if(nonce.Length != 8)
             throw new StratumException(StratumError.Other, "incorrect size of nonce");
 
         var nonceInt = uint.Parse(nonce, NumberStyles.HexNumber);
@@ -962,17 +950,17 @@ public class BitcoinJob
         // validate version-bits (overt ASIC boost)
         uint versionBitsInt = 0;
 
-        if (context.VersionRollingMask.HasValue && versionBits != null)
+        if(context.VersionRollingMask.HasValue && versionBits != null)
         {
             versionBitsInt = uint.Parse(versionBits, NumberStyles.HexNumber);
 
             // enforce that only bits covered by current mask are changed by miner
-            if ((versionBitsInt & ~context.VersionRollingMask.Value) != 0)
+            if((versionBitsInt & ~context.VersionRollingMask.Value) != 0)
                 throw new StratumException(StratumError.Other, "rolling-version mask violation");
         }
 
         // dupe check
-        if (!RegisterSubmit(context.ExtraNonce1, extraNonce2, nTime, nonce))
+        if(!RegisterSubmit(context.ExtraNonce1, extraNonce2, nTime, nonce))
             throw new StratumException(StratumError.DuplicateShare, "duplicate share");
 
         return ProcessShareInternal(worker, extraNonce2, nTimeInt, nonceInt, versionBitsInt);
