@@ -1,3 +1,5 @@
+// miningcore/src/Miningcore/Mining/ShareRecorder.cs
+
 using System.Data.Common;
 using System.Net.Sockets;
 using System.Reactive.Concurrency;
@@ -84,29 +86,61 @@ public class ShareRecorder : BackgroundService
 
     private async Task PersistSharesCoreAsync(IList<Share> shares)
     {
+        // 1) Persist to DB (dominant cost: network + I/O)
         await cf.RunTx(async (con, tx) =>
         {
-            // Insert shares
+            // Map and batch-insert all shares (atomic transaction)
             var mapped = shares.Select(mapper.Map<Persistence.Model.Share>).ToArray();
             await shareRepo.BatchInsertAsync(con, tx, mapped, CancellationToken.None);
 
-            // Insert blocks
+            // Insert block candidates and notify
             foreach(var share in shares)
             {
                 if(!share.IsBlockCandidate)
                     continue;
 
+                // Create pending block record
                 var blockEntity = mapper.Map<Block>(share);
                 blockEntity.Status = BlockStatus.Pending;
                 await blockRepo.InsertAsync(con, tx, blockEntity);
 
+                // Notify about the candidate (already in your original code)
                 if(pools.TryGetValue(share.PoolId, out var poolConfig))
                     messageBus.NotifyBlockFound(share.PoolId, blockEntity, poolConfig.Template);
                 else
-                    logger.Warn(()=> $"Block found for unknown pool {share.PoolId}");
+                    logger.Warn(() => $"Block found for unknown pool {share.PoolId}");
+
+                // === LIVE ROUND: reset round on new candidate (inside TX for consistency) ===
+                // This marks the start of a new round and clears ActualShares.
+                Live.LiveRoundState.OnBlockCandidate(share.PoolId, (ulong?) blockEntity.BlockHeight);
+                // ============================================================================
             }
         });
+
+        // 2) Update LIVE counters OUTSIDE the DB transaction (fast & non-blocking)
+        //    Only 3 atomic ops per share; try/catch ensures real-time stats never break the pipeline.
+        try
+        {
+            foreach(var s in shares)
+            {
+                // Hashrate / online state (lock-free, O(1))
+                Live.LiveHashrateState.ForPool(s.PoolId).Add(1);
+                Live.LiveHashrateState.ForMiner(s.PoolId, s.Miner).Add(1);
+                Live.LiveHashrateState.TouchMiner(s.PoolId, s.Miner);
+
+                // === LIVE ROUND: increment per-share counter (outside TX) ==================
+                // Tracks ActualShares for the current round (used by /api/live/.../round).
+                Live.LiveRoundState.AddShare(s.PoolId);
+                // ==========================================================================
+            }
+        }
+        catch(Exception ex)
+        {
+            // Never fail share recording due to live metrics; single warning per batch
+            logger.Warn(ex, "[LiveHashrateState/LiveRoundState] Batch counters update failed");
+        }
     }
+
 
     private static void OnPolicyRetry(Exception ex, TimeSpan timeSpan, int retry, object context)
     {

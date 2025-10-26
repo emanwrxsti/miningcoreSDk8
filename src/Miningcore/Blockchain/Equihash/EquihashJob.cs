@@ -1,3 +1,5 @@
+// src/Miningcore/Blockchain/Equihash/EquihashJob.cs
+
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Reflection;
@@ -15,6 +17,8 @@ using Miningcore.Util;
 using NBitcoin;
 using NBitcoin.DataEncoders;
 using NBitcoin.Zcash;
+using System.Text;
+
 
 namespace Miningcore.Blockchain.Equihash;
 
@@ -67,6 +71,9 @@ public class EquihashJob
     protected string previousBlockHashReversedHex;
     protected Money rewardToPool;
     protected Transaction txOut;
+    // Add you pool name to the block
+    protected byte[] poolTagBytes;
+
 
     protected virtual Transaction CreateOutputTransaction()
     {
@@ -158,18 +165,19 @@ public class EquihashJob
 
     protected virtual void BuildCoinbase()
     {
+        // ScriptSig with BIP34 (height)
         var script = TxIn.CreateCoinbase((int) BlockTemplate.Height).ScriptSig;
 
         // output transaction
         txOut = CreateOutputTransaction();
 
         using(var stream = new MemoryStream())
-        {   
+        {
             var bs = new BitcoinStream(stream, true);
 
             if(isOverwinterActive)
             {
-                uint mask = (isOverwinterActive ? 1u : 0u );
+                uint mask = (isOverwinterActive ? 1u : 0u);
                 uint shiftedMask = mask << 31;
                 uint versionWithOverwinter = txVersion | shiftedMask;
 
@@ -191,7 +199,7 @@ public class EquihashJob
             bs.ReadWriteAsVarInt(ref txInputCount);
             bs.ReadWrite(sha256Empty);
             bs.ReadWrite(ref coinbaseIndex);
-            bs.ReadWrite(ref script);
+            bs.ReadWrite(ref script);  // sem tag
             bs.ReadWrite(ref coinbaseSequence);
 
             // serialize output transaction
@@ -227,6 +235,7 @@ public class EquihashJob
         }
     }
 
+
     protected virtual byte[] SerializeOutputTransaction(Transaction tx)
     {
         var withDefaultWitnessCommitment = !string.IsNullOrEmpty(BlockTemplate.DefaultWitnessCommitment);
@@ -245,7 +254,7 @@ public class EquihashJob
             long amount;
             byte[] raw;
             uint rawLength;
-            
+
             // serialize outputs
             foreach(var output in tx.Outputs)
             {
@@ -320,18 +329,18 @@ public class EquihashJob
             bs.ReadWrite(solution);
 
             var txCount = transactionCount.ToString();
-            if (Math.Abs(txCount.Length % 2) == 1)
+            if(Math.Abs(txCount.Length % 2) == 1)
                 txCount = "0" + txCount;
 
-            if (transactionCount <= 0xfc)
+            if(transactionCount <= 0xfc)
             {
                 var simpleVarIntBytes = (Span<byte>) txCount.HexToByteArray();
 
                 bs.ReadWrite(simpleVarIntBytes);
             }
-            else if (transactionCount <= 0x7fff)
+            else if(transactionCount <= 0x7fff)
             {
-                if (txCount.Length == 2)
+                if(txCount.Length == 2)
                     txCount = "00" + txCount;
 
                 var complexHeader = (Span<byte>) new byte[] { 0xFD };
@@ -434,11 +443,10 @@ public class EquihashJob
     }
 
     #region API-Surface
-
     public virtual void Init(EquihashBlockTemplate blockTemplate, string jobId,
-        PoolConfig poolConfig, ClusterConfig clusterConfig, IMasterClock clock,
-        IDestination poolAddressDestination, Network network,
-        EquihashSolver solver)
+    PoolConfig poolConfig, ClusterConfig clusterConfig, IMasterClock clock,
+    IDestination poolAddressDestination, Network network,
+    EquihashSolver solver)
     {
         Contract.RequiresNonNull(blockTemplate);
         Contract.RequiresNonNull(poolConfig);
@@ -456,6 +464,8 @@ public class EquihashJob
         BlockTemplate = blockTemplate;
         JobId = jobId;
         Difficulty = (double) new BigRational(networkParams.Diff1BValue, BlockTemplate.Target.HexToReverseByteArray().AsSpan().ToBigInteger());
+
+        // *** Sem tag no base (poolTagBytes não é preenchido aqui). ***
 
         // ZCash Sapling & Overwinter support
         isSaplingActive = networkParams.SaplingActivationHeight.HasValue &&
@@ -476,7 +486,6 @@ public class EquihashJob
             txVersion = networkParams.SaplingTxVersion.Value;
             txVersionGroupId = networkParams.SaplingTxVersionGroupId.Value;
         }
-
         else if(isOverwinterActive)
         {
             txVersion = networkParams.OverwinterTxVersion.Value;
@@ -544,14 +553,14 @@ public class EquihashJob
 
         jobParams = new object[]
         {
-            JobId,
-            BlockTemplate.Version.ReverseByteOrder().ToStringHex8(),
-            previousBlockHashReversedHex,
-            merkleRootReversedHex,
-            hashReserved,
-            BlockTemplate.CurTime.ReverseByteOrder().ToStringHex8(),
-            BlockTemplate.Bits.HexToReverseByteArray().ToHexString(),
-            false
+        JobId,
+        BlockTemplate.Version.ReverseByteOrder().ToStringHex8(),
+        previousBlockHashReversedHex,
+        merkleRootReversedHex,
+        hashReserved,
+        BlockTemplate.CurTime.ReverseByteOrder().ToStringHex8(),
+        BlockTemplate.Bits.HexToReverseByteArray().ToHexString(),
+        false
         };
     }
 

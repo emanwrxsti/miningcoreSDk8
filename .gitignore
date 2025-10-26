@@ -230,3 +230,6 @@ src/Native/libmerakipow/**/*.so
 src/Native/**/CMakeFiles/
 src/Native/**/build/
 
+# Ignore
+script.py
+script.txt

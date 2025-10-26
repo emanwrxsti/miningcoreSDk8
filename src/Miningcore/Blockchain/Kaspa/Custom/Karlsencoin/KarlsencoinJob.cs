@@ -67,7 +67,7 @@ namespace Miningcore.Blockchain.Kaspa.Custom.Karlsencoin
             var shareValue = targetShare.ToUInt256();
 
             // Difficulty calc (Diff1, not Diff1b). KarlsencoinConstants.Diff1 does NOT exist; use KaspaConstants.Diff1.
-            var shareDiff = (double) new BigRational(KaspaConstants.Diff1, targetShare.ToBigInteger()) * shareMultiplier;
+            var shareDiff = (double) new BigRational(KaspaConstants.Diff1Target, targetShare.ToBigInteger()) * shareMultiplier;
 
             // Start with current diff; may fallback to previous if vardiff just changed.
             var stratumDifficulty = context.Difficulty;
