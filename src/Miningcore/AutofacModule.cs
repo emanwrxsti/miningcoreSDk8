@@ -219,7 +219,7 @@ public class AutofacModule : Module
         // Handshake
 
         builder.RegisterType<HandshakeJobManager>();
-        
+
         //////////////////////
         // Kaspa
 

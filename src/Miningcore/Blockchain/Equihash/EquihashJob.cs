@@ -302,63 +302,49 @@ public class EquihashJob
         return blockHeader.ToBytes();
     }
 
+    // Pre-size the MemoryStream to avoid reallocations while writing raw txs
     protected virtual byte[] BuildRawTransactionBuffer()
     {
-        using(var stream = new MemoryStream())
-        {
-            foreach(var tx in BlockTemplate.Transactions)
-            {
-                var txRaw = tx.Data.HexToByteArray();
-                stream.Write(txRaw);
-            }
+        // First pass: compute total byte length (hex string length / 2)
+        int total = 0;
+        foreach(var tx in BlockTemplate.Transactions)
+            total += (tx?.Data?.Length ?? 0) / 2;
 
-            return stream.ToArray();
+        using var stream = total > 0 ? new MemoryStream(total) : new MemoryStream();
+        foreach(var tx in BlockTemplate.Transactions)
+        {
+            // Unavoidable hex decode, but no stream growth now
+            var txRaw = tx.Data.HexToByteArray();
+            stream.Write(txRaw, 0, txRaw.Length);
         }
+
+        return stream.ToArray();
     }
 
+
+    // Faster/leaner SerializeBlock: avoid Span<byte> overloads and string/hex varint building
     protected virtual byte[] SerializeBlock(Span<byte> header, Span<byte> coinbase, Span<byte> solution)
     {
-        var transactionCount = (uint) BlockTemplate.Transactions.Length + 1; // +1 for prepended coinbase tx
-        var rawTransactionBuffer = BuildRawTransactionBuffer();
+        // +1 for the prepended coinbase tx
+        var txCount = (uint) BlockTemplate.Transactions.Length + 1;
+        var rawTxBuffer = BuildRawTransactionBuffer();
 
-        using(var stream = new MemoryStream())
-        {
-            var bs = new BitcoinStream(stream, true);
+        // Capacity hint: header + solution + varint(~5) + coinbase + raw txs
+        using var stream = new MemoryStream(header.Length + solution.Length + 5 + coinbase.Length + rawTxBuffer.Length);
+        var bs = new BitcoinStream(stream, true);
 
-            bs.ReadWrite(header);
-            bs.ReadWrite(solution);
+        // Write header & solution directly to the underlying stream for maximum compatibility
+        stream.Write(header);
+        stream.Write(solution);
 
-            var txCount = transactionCount.ToString();
-            if(Math.Abs(txCount.Length % 2) == 1)
-                txCount = "0" + txCount;
+        // Canonical Bitcoin varint for the transaction count
+        bs.ReadWriteAsVarInt(ref txCount);
 
-            if(transactionCount <= 0xfc)
-            {
-                var simpleVarIntBytes = (Span<byte>) txCount.HexToByteArray();
+        // Coinbase, then the rest of transactions
+        stream.Write(coinbase);
+        stream.Write(rawTxBuffer);
 
-                bs.ReadWrite(simpleVarIntBytes);
-            }
-            else if(transactionCount <= 0x7fff)
-            {
-                if(txCount.Length == 2)
-                    txCount = "00" + txCount;
-
-                var complexHeader = (Span<byte>) new byte[] { 0xFD };
-                var complexVarIntBytes = (Span<byte>) txCount.HexToReverseByteArray();
-
-                // concat header and varInt
-                Span<byte> complexHeaderVarIntBytes = stackalloc byte[complexHeader.Length + complexVarIntBytes.Length];
-                complexHeader.CopyTo(complexHeaderVarIntBytes);
-                complexVarIntBytes.CopyTo(complexHeaderVarIntBytes[complexHeader.Length..]);
-
-                bs.ReadWrite(complexHeaderVarIntBytes);
-            }
-
-            bs.ReadWrite(coinbase);
-            bs.ReadWrite(rawTransactionBuffer);
-
-            return stream.ToArray();
-        }
+        return stream.ToArray();
     }
 
     protected virtual (Share Share, string BlockHex) ProcessShareInternal(StratumConnection worker, string nonce,

@@ -298,17 +298,18 @@ public class BitcoinJob
         return reward;
     }
 
+    // submissions: case-insensitive comparer already ensures case-insensitive keys
     protected bool RegisterSubmit(string extraNonce1, string extraNonce2, string nTime, string nonce)
     {
-        var key = new StringBuilder()
-            .Append(extraNonce1)
-            .Append(extraNonce2?.ToLowerInvariant())
-            .Append(nTime?.ToLowerInvariant())
-            .Append(nonce?.ToLowerInvariant())
-            .ToString();
+        // Null-safe concatenation: nulls result in empty segments
+        var key = string.Concat(extraNonce1 ?? string.Empty,
+                                extraNonce2 ?? string.Empty,
+                                nTime ?? string.Empty,
+                                nonce ?? string.Empty);
 
         return submissions.TryAdd(key, true);
     }
+
 
     protected byte[] SerializeHeader(Span<byte> coinbaseHash, uint nTime, uint nonce, uint? versionMask, uint? versionBits)
     {
@@ -419,53 +420,74 @@ public class BitcoinJob
         }
     }
 
+    // Reserve capacity, keep canonical VarInt via BitcoinStream
     protected virtual byte[] SerializeBlock(byte[] header, byte[] coinbase)
     {
         var rawTransactionBuffer = BuildRawTransactionBuffer();
-        var transactionCount = (uint) BlockTemplate.Transactions.Length + 1; // +1 for prepended coinbase tx
+        var transactionCount = (uint) BlockTemplate.Transactions.Length + 1; // +1 for coinbase
 
-        using(var stream = new MemoryStream())
+        // Estimate final size to avoid reallocations
+        // header + varint(max 5B) + coinbase + txs + PoS(1B optional) + MWEB(optional)
+        int estimated = header.Length + 5 + coinbase.Length + rawTransactionBuffer.Length;
+
+        // PoS coins append a single 0x00 that is replaced by the daemon's signature later
+        if(isPoS) estimated += 1;
+
+        byte[] mwebRaw = null;
+        if(coin.HasMWEB)
         {
-            var bs = new BitcoinStream(stream, true);
-
-            bs.ReadWrite(header);
-            bs.ReadWriteAsVarInt(ref transactionCount);
-
-            bs.ReadWrite(coinbase);
-            bs.ReadWrite(rawTransactionBuffer);
-
-            // POS coins require a zero byte appended to block which the daemon replaces with the signature
-            if(isPoS)
-                bs.ReadWrite((byte) 0);
-
-            // MWEB appendix (Litecoin)
-            if(coin.HasMWEB)
-            {
-                var separator = new byte[] { 0x01 };
-                var mweb = BlockTemplate.Extra.SafeExtensionDataAs<MwebBlockTemplateExtra>();
-                var mwebRaw = mweb.Mweb.HexToByteArray();
-
-                bs.ReadWrite(separator);
-                bs.ReadWrite(mwebRaw);
-            }
-
-            return stream.ToArray();
+            var mweb = BlockTemplate.Extra.SafeExtensionDataAs<MwebBlockTemplateExtra>();
+            mwebRaw = mweb?.Mweb?.HexToByteArray();
+            if(mwebRaw != null) estimated += 1 /*separator*/ + mwebRaw.Length;
         }
+
+        using var stream = new MemoryStream(estimated);
+        var bs = new BitcoinStream(stream, true);
+
+        // Header
+        bs.ReadWrite(header);
+
+        // Tx count (canonical VarInt)
+        bs.ReadWriteAsVarInt(ref transactionCount);
+
+        // Coinbase + rest of transactions
+        bs.ReadWrite(coinbase);
+        bs.ReadWrite(rawTransactionBuffer);
+
+        // PoS: extra 0x00 (daemon replaces with signature)
+        if(isPoS)
+            bs.ReadWrite((byte) 0);
+
+        // Litecoin MWEB appendix (if present)
+        if(mwebRaw != null)
+        {
+            var separator = new byte[] { 0x01 };
+            bs.ReadWrite(separator);
+            bs.ReadWrite(mwebRaw);
+        }
+
+        return stream.ToArray();
     }
 
+    // Pre-size the buffer to avoid reallocations while writing raw transactions
     protected virtual byte[] BuildRawTransactionBuffer()
     {
-        using(var stream = new MemoryStream())
-        {
-            foreach(var tx in BlockTemplate.Transactions)
-            {
-                var txRaw = tx.Data.HexToByteArray();
-                stream.Write(txRaw);
-            }
+        // First pass: compute total byte length from hex strings (2 hex chars = 1 byte)
+        int total = 0;
+        foreach(var tx in BlockTemplate.Transactions)
+            total += (tx?.Data?.Length ?? 0) >> 1;
 
-            return stream.ToArray();
+        using var stream = total > 0 ? new MemoryStream(total) : new MemoryStream();
+
+        foreach(var tx in BlockTemplate.Transactions)
+        {
+            var txRaw = tx.Data.HexToByteArray();
+            stream.Write(txRaw, 0, txRaw.Length);
         }
+
+        return stream.ToArray();
     }
+
 
     #region Masternodes
 
