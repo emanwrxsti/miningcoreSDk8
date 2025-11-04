@@ -1,6 +1,7 @@
 using Miningcore.Mining;
 
-namespace Miningcore.Blockchain.Progpow.kawpow
+namespace Miningcore.Blockchain.Progpow.Kawpow
+
 {
     /// <summary>
     /// ExtraNonce provider tuned for KawPoW profiles.

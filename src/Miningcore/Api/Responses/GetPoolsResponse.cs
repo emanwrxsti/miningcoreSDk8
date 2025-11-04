@@ -1,3 +1,4 @@
+// src/Miningcore/Api/Responses/GetPoolsResponse.cs
 using System.Text.Json; // para JsonElement
 using System.Text.Json.Serialization;
 using Miningcore.Blockchain;

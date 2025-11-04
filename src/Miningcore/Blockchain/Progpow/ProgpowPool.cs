@@ -345,7 +345,8 @@ public class ProgpowPool : PoolBase
                 // Default is KawPoW-family extranonce provider
                 return ctx.Resolve<ProgpowJobManager>(
                     new TypedParameter(typeof(IExtraNonceProvider),
-                        new Miningcore.Blockchain.Progpow.kawpow.KawpowExtraNonceProvider(poolConfig.Id, clusterConfig.InstanceId)));
+                        new Miningcore.Blockchain.Progpow.Kawpow
+.KawpowExtraNonceProvider(poolConfig.Id, clusterConfig.InstanceId)));
         }
     }
 

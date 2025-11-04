@@ -1,3 +1,4 @@
+// src/Miningcore/Api/Responses/GetPoolStatsResponse.cs
 using System;
 
 namespace Miningcore.Api.Responses

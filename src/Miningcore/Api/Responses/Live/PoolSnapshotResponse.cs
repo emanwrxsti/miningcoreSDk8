@@ -1,5 +1,6 @@
-// Responses/Live/PoolSnapshotResponse.cs
+// src/Miningcore/Api/Responses/Live/PoolSnapshotResponse.cs
 using System;
+using System.Text.Json.Serialization;
 
 namespace Miningcore.Api.Responses.Live;
 
@@ -18,6 +19,9 @@ public class PoolSnapshotResponse
     public PoolNetworkInfo Network { get; set; }
 
     public MinerNow[] TopMinersNow { get; set; } = Array.Empty<MinerNow>();
+
+    [JsonPropertyName("hashrate")]
+    public double Hashrate => CurrentHashrate;
 }
 
 public class PoolRoundInfo

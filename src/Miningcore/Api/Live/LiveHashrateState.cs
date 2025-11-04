@@ -1,115 +1,64 @@
-// Api/Live/LiveHashrateState.cs
+// miningcore/src/Miningcore/Api/Live/LiveHashrateState.cs
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace Miningcore.Live;
 
-/// <summary>
-/// Lock-free(ish) in-memory rolling counters for live hashrate.
-/// Design:
-/// - Time window = 600 s (10 minutes), split into 60 buckets of 10 s each.
-/// - Each pool and (pool, miner) keeps a RollingRing accumulating "share events".
-/// - Reads are O(1) for the full-window sum; O(k) for sub-window sums via SumWindow().
-/// - Sharding spreads contention under high concurrency (e.g., many miners).
-/// </summary>
+/// Lock-free in-memory rolling counters (per second) for LIVE.
+/// - Ring of 1024 seconds (power of 2), sum weighted by the difficulty of the share.
+/// - Add(double) is O(1) with Interlocked.
+/// - SumWindow(sec) iterates at most 'windowSec' seconds (<= 600 typical).
 public static class LiveHashrateState
 {
-    // --- Window configuration (match controllers' defaults)
-    public const int DefaultWindowSec = 600;   // 10 minutes
-    public const int BucketSec        = 10;    // 10-second buckets
-    public const int Buckets          = DefaultWindowSec / BucketSec; // 60
-    public const int OnlineGraceSec   = 120;   // mark online if last-seen within this
+    public const int DefaultWindowSec = 600;    // 10 min
+    private const int RingSize = 1024;          // power of 2
+    private const int Mask = RingSize - 1;
+    private const long SCALE = 1_000_000;       // fixed-point 6 decimals
+    public const int OnlineGraceSec = 120;
 
-    /// <summary>
-    /// Rolling ring buffer of "share counts" over the live window.
-    /// Each bucket holds the number of shares observed during that 10 s slice.
-    /// </summary>
     public sealed class RollingRing
     {
-        private readonly int[] buckets = new int[Buckets];
-        private int lastBucketIndex;              // index of the current bucket (0..59)
-        private long lastBucketEpoch10s;          // epoch seconds / 10
-        private long total;                       // running sum across all buckets
+        private readonly long[] buckets = new long[RingSize]; // scaled values
+        private readonly int[] secs = new int[RingSize];      // epochSec from bucket
 
-        public RollingRing()
-        {
-            var now10 = Now10();
-            lastBucketEpoch10s = now10;
-            lastBucketIndex = (int)(now10 % Buckets);
-        }
-
+        /// Increments the bucket of the second chain by 'amount' (difficulty-weighted).
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static long Now10() => DateTimeOffset.UtcNow.ToUnixTimeSeconds() / BucketSec;
-
-        /// <summary>
-        /// Advance the ring to "now", zeroing out any buckets that rolled over.
-        /// Also adjusts the running total accordingly.
-        /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void AdvanceIfNeeded(long now10)
+        public void Add(double amount)
         {
-            var last = Volatile.Read(ref lastBucketEpoch10s);
-            if (now10 == last) return;
+            var nowSec = (int) DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var idx = nowSec & Mask;
 
-            var steps = (int)Math.Min(Buckets, Math.Max(0, now10 - last));
-            var idx = Volatile.Read(ref lastBucketIndex);
-
-            for (var i = 0; i < steps; i++)
+            if (Volatile.Read(ref secs[idx]) != nowSec)
             {
-                idx = (idx + 1) % Buckets;
-                var old = Interlocked.Exchange(ref buckets[idx], 0);
-                Interlocked.Add(ref total, -old);
+                Volatile.Write(ref secs[idx], nowSec);
+                Interlocked.Exchange(ref buckets[idx], 0);
             }
 
-            Volatile.Write(ref lastBucketIndex, idx);
-            Volatile.Write(ref lastBucketEpoch10s, now10);
+            var inc = (long) Math.Round(amount * SCALE);
+            Interlocked.Add(ref buckets[idx], inc);
         }
 
-        /// <summary>
-        /// Add n "share events" to the current bucket and update the running total.
-        /// </summary>
-        public void Add(int n)
+        /// Sum of last 'windowSec' seconds.
+        public double SumWindow(int windowSec)
         {
-            var now10 = Now10();
-            AdvanceIfNeeded(now10);
+            if (windowSec <= 0) windowSec = DefaultWindowSec;
+            var nowSec = (int) DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var fromSec = nowSec - windowSec + 1;
 
-            var idx = Volatile.Read(ref lastBucketIndex);
-            Interlocked.Add(ref buckets[idx], n);
-            Interlocked.Add(ref total, n);
-        }
-
-        /// <summary>
-        /// O(1) sum across the full configured window (600 s).
-        /// </summary>
-        public int Sum()
-        {
-            AdvanceIfNeeded(Now10());
-            return (int)Volatile.Read(ref total);
-        }
-
-        /// <summary>
-        /// O(k) sum across the last "windowSec" seconds, rounded down to bucket resolution.
-        /// For example, with 10 s buckets: 125 s -> 12 buckets -> 120 s of data.
-        /// </summary>
-        public int SumWindow(int windowSec)
-        {
-            AdvanceIfNeeded(Now10());
-
-            var k = Math.Clamp(windowSec / BucketSec, 1, Buckets);
-            var sum = 0;
-            var idx = Volatile.Read(ref lastBucketIndex);
-
-            for (int i = 0; i < k; i++)
+            long acc = 0;
+            for (var t = fromSec; t <= nowSec; t++)
             {
-                var bi = (idx - i + Buckets) % Buckets;
-                sum += Volatile.Read(ref buckets[bi]);
+                var idx = t & Mask;
+                if (Volatile.Read(ref secs[idx]) == t)
+                    acc += Volatile.Read(ref buckets[idx]);
             }
 
-            return sum;
+            return acc / (double) SCALE;
         }
     }
 
-    // --- Sharding to reduce contention on dictionaries under high concurrency.
+    // ---- Sharding to reduce containment
     private const int Shards = 64;
 
     private static readonly ConcurrentDictionary<string, RollingRing>[] PoolRings =
@@ -125,30 +74,21 @@ public static class LiveHashrateState
             new ConcurrentDictionary<(string, string), long>()).ToArray();
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int ShardOf(string s) =>
-        ((s.GetHashCode() & 0x7fffffff) % Shards);
+    private static int ShardOf(string s) => (s.GetHashCode() & 0x7fffffff) % Shards;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int ShardOf((string a, string b) k)
     {
-        // Stable-ish tuple hashing; ensure correct precedence of modulo and mask.
         var h = ((k.a.GetHashCode() * 397) ^ k.b.GetHashCode());
-        return ((h & 0x7fffffff) % Shards);
+        return (h & 0x7fffffff) % Shards;
     }
 
-    /// <summary>
-    /// Get or create the rolling ring for a pool.
-    /// The ring window is fixed; interpretation (actual time window) is up to the caller via SumWindow().
-    /// </summary>
     public static RollingRing ForPool(string poolId)
     {
         var shard = ShardOf(poolId);
         return PoolRings[shard].GetOrAdd(poolId, _ => new RollingRing());
     }
 
-    /// <summary>
-    /// Get or create the rolling ring for a (pool, miner).
-    /// </summary>
     public static RollingRing ForMiner(string poolId, string address)
     {
         var key = (poolId, address);
@@ -156,9 +96,6 @@ public static class LiveHashrateState
         return MinerRings[shard].GetOrAdd(key, _ => new RollingRing());
     }
 
-    /// <summary>
-    /// Mark a miner as "seen now". Call this when a share arrives or a heartbeat is processed.
-    /// </summary>
     public static void TouchMiner(string poolId, string address)
     {
         var key = (poolId, address);
@@ -166,9 +103,6 @@ public static class LiveHashrateState
         MinerLastSeen[shard][key] = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
     }
 
-    /// <summary>
-    /// A miner is considered online if it was seen within the last OnlineGraceSec (or window).
-    /// </summary>
     public static bool IsOnline(string poolId, string address)
     {
         var key = (poolId, address);
@@ -177,20 +111,13 @@ public static class LiveHashrateState
                (DateTimeOffset.UtcNow.ToUnixTimeSeconds() - last) <= Math.Max(DefaultWindowSec, OnlineGraceSec);
     }
 
-    /// <summary>
-    /// Get last-seen epoch seconds for a miner, or null if never seen.
-    /// </summary>
     public static long? GetMinerLastSeenSec(string poolId, string address)
     {
         var key = (poolId, address);
         var shard = ShardOf(key);
-        return MinerLastSeen[shard].TryGetValue(key, out var last) ? last : (long?)null;
+        return MinerLastSeen[shard].TryGetValue(key, out var last) ? last : (long?) null;
     }
 
-    /// <summary>
-    /// Enumerate all miners in a pool with their ring and last-seen.
-    /// This is optimized for read-mostly and avoids allocations inside the hot path.
-    /// </summary>
     public static IEnumerable<(string address, RollingRing ring, long lastSeen)> EnumeratePoolMiners(string poolId)
     {
         for (int i = 0; i < Shards; i++)
@@ -206,10 +133,6 @@ public static class LiveHashrateState
         }
     }
 
-    /// <summary>
-    /// Enumerate all miners across all pools.
-    /// Useful for global search endpoints.
-    /// </summary>
     public static IEnumerable<(string poolId, string address, RollingRing ring, long lastSeen)> EnumerateAllMiners()
     {
         for (int i = 0; i < Shards; i++)

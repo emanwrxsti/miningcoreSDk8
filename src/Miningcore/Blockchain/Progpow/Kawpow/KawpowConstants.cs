@@ -1,6 +1,7 @@
 using System.Numerics;
 
-namespace Miningcore.Blockchain.Progpow.kawpow
+namespace Miningcore.Blockchain.Progpow.Kawpow
+
 {
     /// <summary>
     /// Shared parameters for KawPoW-family coins (RVN, NEOX, CLORE, XNA).

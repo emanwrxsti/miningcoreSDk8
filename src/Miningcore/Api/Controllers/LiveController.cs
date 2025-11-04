@@ -1,26 +1,20 @@
-// Api/Controllers/LiveController.cs
-using System;
-using System.Linq;
 using System.Net;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Http; // required for Response.WriteAsync
 using AutoMapper;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Miningcore.Api.Responses.Live;
 using Miningcore.Configuration;
+using Miningcore.Extensions;
 using Miningcore.Live;
 using Miningcore.Persistence;
 using Miningcore.Persistence.Repositories;
 using Miningcore.Time;
-using Miningcore.Extensions;
-
+using Miningcore.Mining; // IMiningPool + MiningPoolRegistry
+using System.Linq;
+using System.Collections.Generic;
 
 namespace Miningcore.Api.Controllers;
 
-/// <summary>
-/// Live endpoints built on top of in-memory rolling counters.
-/// IMPORTANT: The ring window is fixed in LiveHashrateState; per-request window is honored via SumWindow(windowSec).
-/// </summary>
 [ApiController]
 [Route("api/live")]
 public class LiveController : ControllerBase
@@ -30,24 +24,34 @@ public class LiveController : ControllerBase
     private readonly IStatsRepository statsRepo;
     private readonly IMasterClock clock;
     private readonly IMapper mapper;
+    private readonly MiningPoolRegistry poolRegistry;
 
     public LiveController(
-        ClusterConfig clusterConfig,
-        IConnectionFactory cf,
-        IStatsRepository statsRepo,
-        IMasterClock clock,
-        IMapper mapper)
+    ClusterConfig clusterConfig,
+    IConnectionFactory cf,
+    IStatsRepository statsRepo,
+    IMasterClock clock,
+    IMapper mapper,
+    MiningPoolRegistry poolRegistry)
     {
         this.clusterConfig = clusterConfig;
         this.cf = cf;
         this.statsRepo = statsRepo;
         this.clock = clock;
         this.mapper = mapper;
+        this.poolRegistry = poolRegistry;
     }
 
-    /// <summary>
-    /// Resolve pool config or throw a 404 API exception.
-    /// </summary>
+    // ---------- Helpers ----------
+    private static bool IsEquihash(CoinFamily family) =>
+        family == CoinFamily.Equihash ||
+        family.ToString().Contains("Equihash", StringComparison.OrdinalIgnoreCase);
+
+    private const double Diff1Hash = 4294967296d; // 2^32
+
+    private static string ResolveUnit(CoinFamily family) =>
+        IsEquihash(family) ? "Sol/s" : "H/s";
+
     private PoolConfig GetPool(string poolId)
     {
         var pool = clusterConfig.Pools?.FirstOrDefault(x =>
@@ -57,6 +61,11 @@ public class LiveController : ControllerBase
             throw new ApiException($"Pool '{poolId}' not found", HttpStatusCode.NotFound);
 
         return pool;
+    }
+
+    private IMiningPool TryGetPoolInstance(string poolId)
+    {
+        return poolRegistry.Get(poolId);
     }
 
     // ----------------------------------------------------------------
@@ -70,20 +79,27 @@ public class LiveController : ControllerBase
         var poolCfg = GetPool(poolId);
         var ct = HttpContext.RequestAborted;
 
-        // Reference stats from persistence (for net diff, height, miners, etc.)
         var persisted = await cf.Run(con => statsRepo.GetLastPoolStatsAsync(con, poolCfg.Id, ct));
+        var unit = ResolveUnit(poolCfg.Template.Family);
 
-        // Preferred unit for this coin family
-        var unit = LiveCommon.ResolveUnit(poolCfg.Template.Family);
-
-        // Live counters: Sum over the requested window using the fixed ring
         var ring = LiveHashrateState.ForPool(poolCfg.Id);
-        var shares = ring.SumWindow(windowSec);
-        var sharesPerSec = shares / (double) Math.Max(1, windowSec);
+        var diffSum = ring.SumWindow(windowSec);
+        var sharesPerSec = diffSum / Math.Max(1d, windowSec);
 
-        // Use network difficulty as an approximation for "share difficulty"
-        var shareDiff = persisted?.NetworkDifficulty > 0 ? persisted.NetworkDifficulty : 1d;
-        var currentHps = LiveCommon.HpsFromShares(sharesPerSec, shareDiff);
+        // Use exact pool conversion when available; fallback keeps endpoint alive during early startup
+        var poolInst = TryGetPoolInstance(poolCfg.Id);
+        double current;
+
+        if(poolInst != null)
+            current = poolInst.HashrateFromShares(diffSum, windowSec);
+        else
+        {
+            if(IsEquihash(poolCfg.Template.Family))
+                current = sharesPerSec;
+            else
+                current = sharesPerSec * Diff1Hash;
+        }
+
 
         var resp = new PoolSnapshotResponse
         {
@@ -91,7 +107,7 @@ public class LiveController : ControllerBase
             AsOf = clock.Now,
             WindowSec = windowSec,
             Unit = unit,
-            CurrentHashrate = currentHps,
+            CurrentHashrate = current,
             SharesPerSec = sharesPerSec,
             MinersOnline = persisted?.ConnectedMiners ?? 0,
             Network = new PoolNetworkInfo
@@ -118,31 +134,37 @@ public class LiveController : ControllerBase
     // GET /api/live/pools/{poolId}/miners/{address}/snapshot
     // ----------------------------------------------------------------
     [HttpGet("pools/{poolId}/miners/{address}/snapshot")]
-    public async Task<MinerSnapshotResponse> GetMinerSnapshotAsync(
+    public ActionResult<MinerSnapshotResponse> GetMinerSnapshotAsync(
         string poolId,
         string address,
         [FromQuery] int windowSec = LiveHashrateState.DefaultWindowSec)
     {
         var poolCfg = GetPool(poolId);
-        var ct = HttpContext.RequestAborted;
 
         if(string.IsNullOrWhiteSpace(address))
             throw new ApiException("Invalid or missing miner address", HttpStatusCode.BadRequest);
 
-        // Normalize to improve deduplication and UX
-        address = LiveCommon.NormalizeMinerAddress(poolCfg.Template.Family, address);
+        address = address.Trim();
 
-        // Pull light persistent stats for difficulty hint
-        var persisted = await cf.Run(con => statsRepo.GetLastPoolStatsAsync(con, poolCfg.Id, ct));
-        var unit = LiveCommon.ResolveUnit(poolCfg.Template.Family);
+        var unit = ResolveUnit(poolCfg.Template.Family);
 
-        // Live counters for the miner
         var ring = LiveHashrateState.ForMiner(poolCfg.Id, address);
-        var shares = ring.SumWindow(windowSec);
-        var sharesPerSec = shares / (double) Math.Max(1, windowSec);
+        var diffSum = ring.SumWindow(windowSec);
+        var sharesPerSec = diffSum / Math.Max(1d, windowSec);
 
-        var shareDiff = persisted?.NetworkDifficulty > 0 ? persisted.NetworkDifficulty : 1d;
-        var currentHps = LiveCommon.HpsFromShares(sharesPerSec, shareDiff);
+        var poolInst = TryGetPoolInstance(poolCfg.Id);
+        double current;
+
+        if(poolInst != null)
+            current = poolInst.HashrateFromShares(diffSum, windowSec);
+        else
+        {
+            if(IsEquihash(poolCfg.Template.Family))
+                current = sharesPerSec;
+            else
+                current = sharesPerSec * Diff1Hash;
+        }
+
 
         var online = LiveHashrateState.IsOnline(poolCfg.Id, address);
         var lastSec = LiveHashrateState.GetMinerLastSeenSec(poolCfg.Id, address);
@@ -156,7 +178,7 @@ public class LiveController : ControllerBase
             Unit = unit,
             Online = online,
             LastShareAt = lastSec.HasValue ? DateTimeOffset.FromUnixTimeSeconds(lastSec.Value).UtcDateTime : null,
-            CurrentHashrate = currentHps,
+            CurrentHashrate = current,
             SharesPerSec = sharesPerSec,
             DifficultyAssigned = 0,
             RejectPercentWindow = 0,
@@ -168,7 +190,7 @@ public class LiveController : ControllerBase
     }
 
     // ----------------------------------------------------------------
-    // GET /api/live/miners/search?q=&limit=20  (global search)
+    // GET /api/live/miners/search?q=&limit=20
     // ----------------------------------------------------------------
     [HttpGet("miners/search")]
     public ActionResult<object> SearchMiners([FromQuery] string q, [FromQuery] int limit = 20)
@@ -183,19 +205,19 @@ public class LiveController : ControllerBase
             .Take(limit)
             .Select(kv =>
             {
-                var poolId = kv.poolId;
-                var addr = kv.address;
-                var online = LiveHashrateState.IsOnline(poolId, addr);
-                var shares = kv.ring.SumWindow(LiveHashrateState.DefaultWindowSec);
-                var sharesPerSec = shares / (double) LiveHashrateState.DefaultWindowSec;
+                var perSec = kv.ring.SumWindow(LiveHashrateState.DefaultWindowSec) /
+                             Math.Max(1d, LiveHashrateState.DefaultWindowSec);
 
+                // We expose neutral shares/s in search to keep it simple
                 return new
                 {
-                    address = addr,
-                    poolId,
-                    lastSeen = kv.lastSeen > 0 ? DateTimeOffset.FromUnixTimeSeconds(kv.lastSeen).UtcDateTime : (DateTime?) null,
-                    online,
-                    currentHashrate = LiveCommon.HpsFromShares(sharesPerSec, 1d), // neutral diff; UI should treat as relative
+                    address = kv.address,
+                    poolId = kv.poolId,
+                    lastSeen = kv.lastSeen > 0
+                        ? DateTimeOffset.FromUnixTimeSeconds(kv.lastSeen).UtcDateTime
+                        : (DateTime?) null,
+                    online = LiveHashrateState.IsOnline(kv.poolId, kv.address),
+                    sharesPerSec = perSec,
                     windowSec = LiveHashrateState.DefaultWindowSec
                 };
             });
@@ -205,36 +227,47 @@ public class LiveController : ControllerBase
     }
 
     // ----------------------------------------------------------------
-    // GET /api/live/pools/{poolId}/top-miners?windowSec=600&limit=50
+    // GET /api/live/pools/{poolId}/top-miners
     // ----------------------------------------------------------------
     [HttpGet("pools/{poolId}/top-miners")]
-    public async Task<ActionResult<object>> GetTopMinersNowAsync(
+    public ActionResult<object> GetTopMinersNowAsync(
         string poolId,
         [FromQuery] int windowSec = LiveHashrateState.DefaultWindowSec,
         [FromQuery] int limit = 50)
     {
         var poolCfg = GetPool(poolId);
-        var ct = HttpContext.RequestAborted;
-
         limit = Math.Clamp(limit, 1, 200);
+        var unit = ResolveUnit(poolCfg.Template.Family);
 
-        // Difficulty hint from persistence
-        var persisted = await cf.Run(con => statsRepo.GetLastPoolStatsAsync(con, poolCfg.Id, ct));
-        var diff = persisted?.NetworkDifficulty > 0 ? persisted.NetworkDifficulty : 1d;
-        var unit = LiveCommon.ResolveUnit(poolCfg.Template.Family);
+        var poolInst = TryGetPoolInstance(poolCfg.Id);
 
         var miners = LiveHashrateState.EnumeratePoolMiners(poolCfg.Id)
             .Select(m =>
             {
-                var shares = m.ring.SumWindow(windowSec);
-                var sps = Math.Max(0.0, shares / (double) windowSec);
-                var hps = LiveCommon.HpsFromShares(sps, diff);
+                var diffSum = m.ring.SumWindow(windowSec);
+                var perSec = diffSum / Math.Max(1d, windowSec);
+
+                double h;
+
+                if(poolInst != null)
+                    h = poolInst.HashrateFromShares(diffSum, windowSec);
+                else
+                {
+                    if(IsEquihash(poolCfg.Template.Family))
+                        h = perSec;
+                    else
+                        h = perSec * Diff1Hash;
+                }
+
+
                 return new
                 {
                     address = m.address,
-                    hashrate = hps,
+                    hashrate = h,
                     online = LiveHashrateState.IsOnline(poolCfg.Id, m.address),
-                    lastShareAt = m.lastSeen > 0 ? DateTimeOffset.FromUnixTimeSeconds(m.lastSeen).UtcDateTime : (DateTime?) null
+                    lastShareAt = m.lastSeen > 0
+                        ? DateTimeOffset.FromUnixTimeSeconds(m.lastSeen).UtcDateTime
+                        : (DateTime?) null
                 };
             })
             .OrderByDescending(x => x.hashrate)
@@ -257,12 +290,9 @@ public class LiveController : ControllerBase
         var persisted = await cf.Run(con => statsRepo.GetLastPoolStatsAsync(con, poolCfg.Id, ct));
         var networkDiff = persisted?.NetworkDifficulty ?? 0d;
 
-        // LiveRoundState is assumed to exist in your codebase.
-        // It should snapshot current round progress (actual shares, current height, startedAt).
         var (startedAt, height, actualShares) = LiveRoundState.Snapshot(poolCfg.Id);
 
-        // Expected shares ~ network difficulty (approximation at Diff1)
-        var expectedShares = networkDiff;
+        var expectedShares = networkDiff; // Diff1
         var luckPercent = expectedShares > 0 ? (actualShares / expectedShares) * 100.0 : 0.0;
 
         Response.Headers["Cache-Control"] = "no-store";
@@ -278,7 +308,7 @@ public class LiveController : ControllerBase
     }
 
     // ----------------------------------------------------------------
-    // GET /api/live/pools/{poolId}/feed   (Server-Sent Events)
+    // GET /api/live/pools/{poolId}/feed (SSE)
     // ----------------------------------------------------------------
     [HttpGet("pools/{poolId}/feed")]
     public async Task FeedAsync(string poolId, [FromQuery] int intervalSec = 2)
@@ -290,29 +320,39 @@ public class LiveController : ControllerBase
         Response.ContentType = "text/event-stream";
 
         var ct = HttpContext.RequestAborted;
+        var poolInst = TryGetPoolInstance(poolCfg.Id);
 
         while(!ct.IsCancellationRequested)
         {
-            // Compute using a stable window for SSE (keeps bandwidth predictable)
-            var ring = LiveHashrateState.ForPool(poolCfg.Id);
-            var shares = ring.SumWindow(LiveHashrateState.DefaultWindowSec);
-            var sps = shares / (double) LiveHashrateState.DefaultWindowSec;
+            var unit = ResolveUnit(poolCfg.Template.Family);
+            var diffSum = LiveHashrateState.ForPool(poolCfg.Id).SumWindow(LiveHashrateState.DefaultWindowSec);
+            var perSec = diffSum / Math.Max(1d, LiveHashrateState.DefaultWindowSec);
 
-            var persisted = await cf.Run(con => statsRepo.GetLastPoolStatsAsync(con, poolCfg.Id, ct));
-            var diff = persisted?.NetworkDifficulty > 0 ? persisted.NetworkDifficulty : 1d;
-            var hps = LiveCommon.HpsFromShares(sps, diff);
+            double current;
+
+            if(poolInst != null)
+                current = poolInst.HashrateFromShares(diffSum, LiveHashrateState.DefaultWindowSec);
+            else
+            {
+                if(IsEquihash(poolCfg.Template.Family))
+                    current = perSec;
+                else
+                    current = perSec * Diff1Hash;
+            }
+
 
             var nowIso = DateTime.UtcNow.ToString("o");
-            var payload = $"data: {{\"poolId\":\"{poolCfg.Id}\",\"asOf\":\"{nowIso}\",\"windowSec\":{LiveHashrateState.DefaultWindowSec},\"currentHashrate\":{hps} }}\n\n";
+            var payload =
+                $"data: {{\"poolId\":\"{poolCfg.Id}\",\"asOf\":\"{nowIso}\",\"unit\":\"{unit}\",\"windowSec\":{LiveHashrateState.DefaultWindowSec},\"currentHashrate\":{current}}}\n\n";
+
             await Response.WriteAsync(payload, ct);
             await Response.Body.FlushAsync(ct);
-
             await Task.Delay(TimeSpan.FromSeconds(intervalSec), ct);
         }
     }
 
     // ----------------------------------------------------------------
-    // GET /api/live/status  (cluster landing summary)
+    // GET /api/live/status
     // ----------------------------------------------------------------
     [HttpGet("status")]
     public async Task<ActionResult<object>> GetClusterStatusAsync()
@@ -321,32 +361,43 @@ public class LiveController : ControllerBase
         var pools = clusterConfig.Pools ?? Array.Empty<PoolConfig>();
         var ct = HttpContext.RequestAborted;
 
-        var summaries = new System.Collections.Generic.List<object>();
+        var summaries = new List<object>();
+        var windowSec = LiveHashrateState.DefaultWindowSec;
 
-        foreach(var pool in pools)
+        foreach(var poolCfg in pools)
         {
-            var persisted = await cf.Run(con => statsRepo.GetLastPoolStatsAsync(con, pool.Id, ct));
-            var diff = persisted?.NetworkDifficulty > 0 ? persisted.NetworkDifficulty : 1d;
-            var netHeight = persisted?.BlockHeight ?? 0;
+            var persisted = await cf.Run(con => statsRepo.GetLastPoolStatsAsync(con, poolCfg.Id, ct));
+            var unit = ResolveUnit(poolCfg.Template.Family);
 
-            var ring = LiveHashrateState.ForPool(pool.Id);
-            var shares = ring.SumWindow(LiveHashrateState.DefaultWindowSec);
-            var sps = shares / (double) LiveHashrateState.DefaultWindowSec;
-            var currentHps = LiveCommon.HpsFromShares(sps, diff);
+            var diffSum = LiveHashrateState.ForPool(poolCfg.Id).SumWindow(windowSec);
+            var perSec = diffSum / Math.Max(1d, windowSec);
 
-            var minersOnline = persisted?.ConnectedMiners ?? 0;
+            var poolInst = TryGetPoolInstance(poolCfg.Id);
+
+            double current;
+
+            if(poolInst != null)
+                current = poolInst.HashrateFromShares(diffSum, windowSec);
+            else
+            {
+                if(IsEquihash(poolCfg.Template.Family))
+                    current = perSec;
+                else
+                    current = perSec * Diff1Hash;
+            }
+
 
             summaries.Add(new
             {
-                poolId = pool.Id,
-                coin = pool.Template.Symbol,
-                algo = pool.Template.Family.ToString(),
-                currentHashrate = currentHps,
-                minersOnline,
-                blockHeight = netHeight,
-                difficulty = diff,
-                unit = LiveCommon.ResolveUnit(pool.Template.Family),
-                windowSec = LiveHashrateState.DefaultWindowSec
+                poolId = poolCfg.Id,
+                coin = poolCfg.Template.Symbol,
+                algo = poolCfg.Template.Family.ToString(),
+                currentHashrate = current,
+                minersOnline = persisted?.ConnectedMiners ?? 0,
+                blockHeight = persisted?.BlockHeight ?? 0,
+                difficulty = persisted?.NetworkDifficulty ?? 0,
+                unit,
+                windowSec
             });
         }
 

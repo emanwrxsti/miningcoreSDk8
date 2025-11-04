@@ -86,7 +86,7 @@ public class ShareRecorder : BackgroundService
 
     private async Task PersistSharesCoreAsync(IList<Share> shares)
     {
-        // 1) Persist to DB (dominant cost: network + I/O)
+        // Persist to DB (dominant cost: network + I/O)
         await cf.RunTx(async (con, tx) =>
         {
             // Map and batch-insert all shares (atomic transaction)
@@ -117,26 +117,27 @@ public class ShareRecorder : BackgroundService
             }
         });
 
-        // 2) Update LIVE counters OUTSIDE the DB transaction (fast & non-blocking)
-        //    Only 3 atomic ops per share; try/catch ensures real-time stats never break the pipeline.
         try
         {
+            // Difficulty-weighted live counters (VarDiff-safe)
+            // We must add the ACTUAL per-share difficulty (Diff1-normalized), not "1".
             foreach(var s in shares)
             {
-                // Hashrate / online state (lock-free, O(1))
-                Live.LiveHashrateState.ForPool(s.PoolId).Add(1);
-                Live.LiveHashrateState.ForMiner(s.PoolId, s.Miner).Add(1);
+                // Defensive: normalize negative/zero difficulties
+                var amt = s.Difficulty > 0 ? s.Difficulty : 1d;
+
+                // O(1) lock-free counters
+                Live.LiveHashrateState.ForPool(s.PoolId).Add(amt);
+                Live.LiveHashrateState.ForMiner(s.PoolId, s.Miner).Add(amt);
                 Live.LiveHashrateState.TouchMiner(s.PoolId, s.Miner);
 
-                // === LIVE ROUND: increment per-share counter (outside TX) ==================
-                // Tracks ActualShares for the current round (used by /api/live/.../round).
+                // Round counts shares (not weighted)
                 Live.LiveRoundState.AddShare(s.PoolId);
-                // ==========================================================================
             }
+
         }
         catch(Exception ex)
         {
-            // Never fail share recording due to live metrics; single warning per batch
             logger.Warn(ex, "[LiveHashrateState/LiveRoundState] Batch counters update failed");
         }
     }

@@ -1,7 +1,8 @@
 using System.Numerics;
 using Miningcore.Configuration;
 
-namespace Miningcore.Blockchain.Progpow.kawpow
+namespace Miningcore.Blockchain.Progpow.Kawpow
+
 {
     /// <summary>
     /// Selects profile parameters at Init() time. The hot path then uses cached fields.

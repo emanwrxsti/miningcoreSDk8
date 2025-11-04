@@ -332,7 +332,8 @@ public class ProgpowJob : BitcoinJob
 
         // --- Select KawPoW profile parameters ONCE per job (fast for the hot path)
         {
-            var sel = Miningcore.Blockchain.Progpow.kawpow.KawpowVariant.SelectFor(pc.Template);
+            var sel = Miningcore.Blockchain.Progpow.Kawpow
+.KawpowVariant.SelectFor(pc.Template);
             this.extraNoncePlaceHolderLength = sel.extranonceLen; // field provided by base class
         }
 

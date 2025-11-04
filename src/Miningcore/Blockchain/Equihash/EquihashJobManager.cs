@@ -9,6 +9,7 @@ using Miningcore.Blockchain.Equihash.Custom.BitcoinZ;
 using Miningcore.Blockchain.Equihash.Custom.Minexcoin;
 using Miningcore.Blockchain.Equihash.Custom.Piratechain;
 using Miningcore.Blockchain.Equihash.Custom.Veruscoin;
+//using Miningcore.Blockchain.Equihash.Custom.Ycash;
 using Miningcore.Blockchain.Equihash.DaemonResponses;
 using Miningcore.Configuration;
 using Miningcore.Contracts;
@@ -101,6 +102,9 @@ public class EquihashJobManager : BitcoinJobManagerBase<EquihashJob>
 
             case "BTCZ":
                 return new BitcoinZJob();
+
+            //case "YCASH":
+                //return new YcashJob();
         }
 
         return new EquihashJob();
