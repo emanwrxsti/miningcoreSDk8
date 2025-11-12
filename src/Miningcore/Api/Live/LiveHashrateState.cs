@@ -1,35 +1,36 @@
-// miningcore/src/Miningcore/Api/Live/LiveHashrateState.cs
+// miningcore/src/Miningcore/Live/LiveHashrateState.cs
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Miningcore.Live;
 
-/// Lock-free in-memory rolling counters (per second) for LIVE.
-/// - Ring of 1024 seconds (power of 2), sum weighted by the difficulty of the share.
-/// - Add(double) is O(1) with Interlocked.
-/// - SumWindow(sec) iterates at most 'windowSec' seconds (<= 600 typical).
+/// <summary>
+/// Lock-free live hashrate + presence with per-worker tracking (address.miner)
+/// - Rolling ring per second (1024s) using fixed-point
+/// - Timing Wheel eviction (buckets) O(1) per share, O(k) per minute
+/// </summary>
 public static class LiveHashrateState
 {
-    public const int DefaultWindowSec = 600;    // 10 min
-    private const int RingSize = 1024;          // power of 2
-    private const int Mask = RingSize - 1;
-    private const long SCALE = 1_000_000;       // fixed-point 6 decimals
+    public const int DefaultWindowSec = 600; // 10 min
     public const int OnlineGraceSec = 120;
+
+    private const int RingSize = 1024;
+    private const int Mask = RingSize - 1;
+    private const long SCALE = 1_000_000; // 6 decimals
 
     public sealed class RollingRing
     {
-        private readonly long[] buckets = new long[RingSize]; // scaled values
-        private readonly int[] secs = new int[RingSize];      // epochSec from bucket
+        private readonly long[] buckets = new long[RingSize];
+        private readonly int[] secs = new int[RingSize];
 
-        /// Increments the bucket of the second chain by 'amount' (difficulty-weighted).
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Add(double amount)
         {
             var nowSec = (int) DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var idx = nowSec & Mask;
 
-            if (Volatile.Read(ref secs[idx]) != nowSec)
+            if(Volatile.Read(ref secs[idx]) != nowSec)
             {
                 Volatile.Write(ref secs[idx], nowSec);
                 Interlocked.Exchange(ref buckets[idx], 0);
@@ -39,18 +40,17 @@ public static class LiveHashrateState
             Interlocked.Add(ref buckets[idx], inc);
         }
 
-        /// Sum of last 'windowSec' seconds.
         public double SumWindow(int windowSec)
         {
-            if (windowSec <= 0) windowSec = DefaultWindowSec;
+            if(windowSec <= 0) windowSec = DefaultWindowSec;
             var nowSec = (int) DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var fromSec = nowSec - windowSec + 1;
 
             long acc = 0;
-            for (var t = fromSec; t <= nowSec; t++)
+            for(var t = fromSec; t <= nowSec; t++)
             {
                 var idx = t & Mask;
-                if (Volatile.Read(ref secs[idx]) == t)
+                if(Volatile.Read(ref secs[idx]) == t)
                     acc += Volatile.Read(ref buckets[idx]);
             }
 
@@ -58,90 +58,255 @@ public static class LiveHashrateState
         }
     }
 
-    // ---- Sharding to reduce containment
+    // ----------------- SHARDING -----------------
     private const int Shards = 64;
 
     private static readonly ConcurrentDictionary<string, RollingRing>[] PoolRings =
-        Enumerable.Range(0, Shards).Select(_ =>
-            new ConcurrentDictionary<string, RollingRing>(StringComparer.OrdinalIgnoreCase)).ToArray();
+        Enumerable.Range(0, Shards)
+            .Select(_ => new ConcurrentDictionary<string, RollingRing>(StringComparer.OrdinalIgnoreCase))
+            .ToArray();
 
-    private static readonly ConcurrentDictionary<(string poolId, string address), RollingRing>[] MinerRings =
-        Enumerable.Range(0, Shards).Select(_ =>
-            new ConcurrentDictionary<(string, string), RollingRing>()).ToArray();
+    private static readonly ConcurrentDictionary<(string poolId, string address, string miner), RollingRing>[] WorkerRings =
+        Enumerable.Range(0, Shards)
+            .Select(_ => new ConcurrentDictionary<(string, string, string), RollingRing>())
+            .ToArray();
 
-    private static readonly ConcurrentDictionary<(string poolId, string address), long>[] MinerLastSeen =
-        Enumerable.Range(0, Shards).Select(_ =>
-            new ConcurrentDictionary<(string, string), long>()).ToArray();
+    private static readonly ConcurrentDictionary<(string poolId, string address, string miner), long>[] WorkerLastSeen =
+        Enumerable.Range(0, Shards)
+            .Select(_ => new ConcurrentDictionary<(string, string, string), long>())
+            .ToArray();
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int ShardOf(string s) => (s.GetHashCode() & 0x7fffffff) % Shards;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int ShardOf((string a, string b) k)
+    private static int ShardOf((string a, string b, string c) k)
     {
-        var h = ((k.a.GetHashCode() * 397) ^ k.b.GetHashCode());
-        return (h & 0x7fffffff) % Shards;
+        unchecked
+        {
+            var h = k.a.GetHashCode();
+            h = (h * 397) ^ k.b.GetHashCode();
+            h = (h * 397) ^ k.c.GetHashCode();
+            return (h & 0x7fffffff) % Shards;
+        }
     }
 
+    // ----------------- POOL-LEVEL -----------------
     public static RollingRing ForPool(string poolId)
     {
         var shard = ShardOf(poolId);
         return PoolRings[shard].GetOrAdd(poolId, _ => new RollingRing());
     }
 
-    public static RollingRing ForMiner(string poolId, string address)
+    // ----------------- WORKER-LEVEL (address.miner) -----------------
+    public static RollingRing ForWorker(string poolId, string address, string miner)
     {
-        var key = (poolId, address);
+        address ??= string.Empty;
+        miner ??= string.Empty;
+
+        var key = (poolId, address, miner);
         var shard = ShardOf(key);
-        return MinerRings[shard].GetOrAdd(key, _ => new RollingRing());
+        return WorkerRings[shard].GetOrAdd(key, _ => new RollingRing());
     }
 
-    public static void TouchMiner(string poolId, string address)
+    public static void TouchWorker(string poolId, string address, string miner)
     {
-        var key = (poolId, address);
+        address ??= string.Empty;
+        miner ??= string.Empty;
+
+        var key = (poolId, address, miner);
         var shard = ShardOf(key);
-        MinerLastSeen[shard][key] = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        WorkerLastSeen[shard][key] = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
     }
 
-    public static bool IsOnline(string poolId, string address)
+    public static long? GetWorkerLastSeenSec(string poolId, string address, string miner)
     {
-        var key = (poolId, address);
+        address ??= string.Empty;
+        miner ??= string.Empty;
+
+        var key = (poolId, address, miner);
         var shard = ShardOf(key);
-        return MinerLastSeen[shard].TryGetValue(key, out var last) &&
-               (DateTimeOffset.UtcNow.ToUnixTimeSeconds() - last) <= Math.Max(DefaultWindowSec, OnlineGraceSec);
+        return WorkerLastSeen[shard].TryGetValue(key, out var sec) ? sec : (long?) null;
     }
 
-    public static long? GetMinerLastSeenSec(string poolId, string address)
+    public static bool IsWorkerOnline(string poolId, string address, string miner, int? windowOverrideSec = null)
     {
-        var key = (poolId, address);
-        var shard = ShardOf(key);
-        return MinerLastSeen[shard].TryGetValue(key, out var last) ? last : (long?) null;
+        var last = GetWorkerLastSeenSec(poolId, address, miner);
+        if(!last.HasValue) return false;
+
+        var grace = Math.Max(windowOverrideSec ?? DefaultWindowSec, OnlineGraceSec);
+        return (DateTimeOffset.UtcNow.ToUnixTimeSeconds() - last.Value) <= grace;
     }
 
-    public static IEnumerable<(string address, RollingRing ring, long lastSeen)> EnumeratePoolMiners(string poolId)
+    public static IEnumerable<(string poolId, string address, string miner, RollingRing ring, long lastSeen)> EnumeratePoolWorkers(string poolId)
     {
-        for (int i = 0; i < Shards; i++)
+        for(int i = 0; i < Shards; i++)
         {
-            foreach (var kv in MinerRings[i])
+            foreach(var kv in WorkerRings[i])
             {
-                if (kv.Key.poolId == poolId)
+                if(kv.Key.poolId == poolId)
                 {
-                    MinerLastSeen[i].TryGetValue(kv.Key, out var last);
-                    yield return (kv.Key.address, kv.Value, last);
+                    WorkerLastSeen[i].TryGetValue(kv.Key, out var last);
+                    yield return (kv.Key.poolId, kv.Key.address, kv.Key.miner, kv.Value, last);
                 }
             }
         }
     }
 
-    public static IEnumerable<(string poolId, string address, RollingRing ring, long lastSeen)> EnumerateAllMiners()
+    public static IEnumerable<(string poolId, string address, string miner, RollingRing ring, long lastSeen)> EnumerateAllWorkers()
     {
-        for (int i = 0; i < Shards; i++)
+        for(int i = 0; i < Shards; i++)
         {
-            foreach (var kv in MinerRings[i])
+            foreach(var kv in WorkerRings[i])
             {
-                MinerLastSeen[i].TryGetValue(kv.Key, out var last);
-                yield return (kv.Key.poolId, kv.Key.address, kv.Value, last);
+                WorkerLastSeen[i].TryGetValue(kv.Key, out var last);
+                yield return (kv.Key.poolId, kv.Key.address, kv.Key.miner, kv.Value, last);
             }
         }
+    }
+
+    // ----------------- ADDRESS-LEVEL AGGREGATES -----------------
+    public static (double diffSum, long lastSeenMax) GetAddressWindow(string poolId, string address, int windowSec)
+    {
+        address ??= string.Empty;
+
+        double acc = 0;
+        long lastMax = 0;
+
+        for(int i = 0; i < Shards; i++)
+        {
+            foreach(var kv in WorkerRings[i])
+            {
+                if(kv.Key.poolId == poolId && kv.Key.address == address)
+                {
+                    acc += kv.Value.SumWindow(windowSec);
+                    if(WorkerLastSeen[i].TryGetValue(kv.Key, out var last) && last > lastMax)
+                        lastMax = last;
+                }
+            }
+        }
+
+        return (acc, lastMax);
+    }
+
+    public static IEnumerable<(string address, double diffSum, long lastSeenMax)> EnumeratePoolAddresses(string poolId, int windowSec)
+    {
+        var map = new Dictionary<string, (double diff, long last)>(StringComparer.OrdinalIgnoreCase);
+
+        for(int i = 0; i < Shards; i++)
+        {
+            foreach(var kv in WorkerRings[i])
+            {
+                if(kv.Key.poolId != poolId) continue;
+
+                var addr = kv.Key.address;
+                var add = kv.Value.SumWindow(windowSec);
+
+                WorkerLastSeen[i].TryGetValue(kv.Key, out var last);
+                if(map.TryGetValue(addr, out var cur))
+                    map[addr] = (cur.diff + add, Math.Max(cur.last, last));
+                else
+                    map[addr] = (add, last);
+            }
+        }
+
+        foreach(var kv in map)
+            yield return (kv.Key, kv.Value.diff, kv.Value.last);
+    }
+
+    public static bool IsAddressOnline(string poolId, string address, int? windowOverrideSec = null)
+    {
+        var (_, last) = GetAddressWindow(poolId, address, windowOverrideSec ?? DefaultWindowSec);
+        if(last <= 0) return false;
+
+        var grace = Math.Max(windowOverrideSec ?? DefaultWindowSec, OnlineGraceSec);
+        return (DateTimeOffset.UtcNow.ToUnixTimeSeconds() - last) <= grace;
+    }
+
+    // ----------------- TIMING WHEEL EVICTION (per worker) -----------------
+    private const int Buckets = 64;
+    private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(40);
+    private static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(1);
+
+    private static readonly ConcurrentQueue<ExpireToken>[] Wheel =
+        Enumerable.Range(0, Buckets).Select(_ => new ConcurrentQueue<ExpireToken>()).ToArray();
+
+    private static int currentBucketIdx = 0;
+
+    private static readonly ConcurrentDictionary<(string poolId, string address, string miner), int> Gen =
+        new ConcurrentDictionary<(string, string, string), int>();
+
+    private static readonly Timer SweepTimer =
+        new Timer(_ => SweepTickSafe(), null, SweepInterval, SweepInterval);
+
+    private readonly struct ExpireToken
+    {
+        public readonly string PoolId;
+        public readonly string Address;
+        public readonly string Miner;
+        public readonly int GenAtInsert;
+
+        public ExpireToken(string poolId, string address, string miner, int gen)
+        {
+            PoolId = poolId; Address = address; Miner = miner; GenAtInsert = gen;
+        }
+    }
+
+    /// <summary>Schedule eviction for a worker (call this on every share)</summary>
+    public static void ScheduleExpiration(string poolId, string address, string miner)
+    {
+        address ??= string.Empty;
+        miner ??= string.Empty;
+
+        var key = (poolId, address, miner);
+        var gen = Gen.AddOrUpdate(key, 1, static (_, old) => unchecked(old + 1));
+
+        var expiry = DateTimeOffset.UtcNow + Ttl;
+        var bucketIdx = (int)((expiry.ToUnixTimeSeconds() / 60) & (Buckets - 1));
+        Wheel[bucketIdx].Enqueue(new ExpireToken(poolId, address, miner, gen));
+    }
+
+    private static void SweepTickSafe()
+    {
+        try { SweepTick(); }
+        catch { /* ignore/log */ }
+    }
+
+    private static int SweepTick()
+    {
+        var removed = 0;
+        var now = DateTimeOffset.UtcNow;
+        var idx = Interlocked.Increment(ref currentBucketIdx) & (Buckets - 1);
+
+        while(Wheel[idx].TryDequeue(out var tok))
+        {
+            var last = GetWorkerLastSeenSec(tok.PoolId, tok.Address, tok.Miner);
+            if(!last.HasValue) continue;
+
+            var expired = (now.ToUnixTimeSeconds() - last.Value) >= (long) Ttl.TotalSeconds;
+
+            if(expired && Gen.TryGetValue((tok.PoolId, tok.Address, tok.Miner), out var curGen) && curGen == tok.GenAtInsert)
+            {
+                if(TryRemoveWorker(tok.PoolId, tok.Address, tok.Miner))
+                    removed++;
+            }
+        }
+
+        return removed;
+    }
+
+    private static bool TryRemoveWorker(string poolId, string address, string miner)
+    {
+        address ??= string.Empty;
+        miner ??= string.Empty;
+
+        var key = (poolId, address, miner);
+        var shard = ShardOf(key);
+
+        var ok1 = WorkerLastSeen[shard].TryRemove(key, out _);
+        var ok2 = WorkerRings[shard].TryRemove(key, out _);
+        Gen.TryRemove(key, out _);
+
+        return ok1 || ok2;
     }
 }

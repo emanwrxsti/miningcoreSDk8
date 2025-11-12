@@ -120,21 +120,22 @@ public class ShareRecorder : BackgroundService
         try
         {
             // Difficulty-weighted live counters (VarDiff-safe)
-            // We must add the ACTUAL per-share difficulty (Diff1-normalized), not "1".
             foreach(var s in shares)
             {
-                // Defensive: normalize negative/zero difficulties
                 var amt = s.Difficulty > 0 ? s.Difficulty : 1d;
 
-                // O(1) lock-free counters
+                // Pool-level
                 Live.LiveHashrateState.ForPool(s.PoolId).Add(amt);
-                Live.LiveHashrateState.ForMiner(s.PoolId, s.Miner).Add(amt);
-                Live.LiveHashrateState.TouchMiner(s.PoolId, s.Miner);
+
+                // Worker-level
+                Live.LiveHashrateState.ForWorker(s.PoolId, s.Miner, s.Worker).Add(amt);
+                Live.LiveHashrateState.TouchWorker(s.PoolId, s.Miner, s.Worker);
+                Live.LiveHashrateState.ScheduleExpiration(s.PoolId, s.Miner, s.Worker);
+
 
                 // Round counts shares (not weighted)
                 Live.LiveRoundState.AddShare(s.PoolId);
             }
-
         }
         catch(Exception ex)
         {
