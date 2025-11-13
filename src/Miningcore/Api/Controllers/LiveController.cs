@@ -35,6 +35,8 @@ public class LiveController : ControllerBase
     private const int DefaultLimit = 100;
     private const int MaxLimit = 500;
 
+    private const int DefaultPageSize = 50;
+
     public LiveController(
         ClusterConfig clusterConfig,
         IConnectionFactory cf,
@@ -723,7 +725,7 @@ public class LiveController : ControllerBase
         string poolId,
         [FromQuery] int? windowSec,
         [FromQuery] int page = 1,
-        [FromQuery] int pageSize = DefaultLimit)
+        [FromQuery] int pageSize = DefaultPageSize)
     {
         // Clamp inputs
         var win = Math.Clamp(windowSec ?? DefaultWindowSec, MinWindowSec, MaxWindowSec);
@@ -1384,7 +1386,7 @@ public class LiveController : ControllerBase
         string poolId,
         [FromQuery] int? windowSec,
         [FromQuery] int page = 1,
-        [FromQuery] int pageSize = DefaultLimit)
+        [FromQuery] int pageSize = DefaultPageSize)
     {
         var win = Math.Clamp(windowSec ?? DefaultWindowSec, MinWindowSec, MaxWindowSec);
         page = Math.Max(1, page);
