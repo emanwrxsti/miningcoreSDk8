@@ -1,5 +1,7 @@
 // Live/LiveRoundState.cs
+using System;
 using System.Collections.Concurrent;
+using System.Threading;
 
 namespace Miningcore.Live;
 

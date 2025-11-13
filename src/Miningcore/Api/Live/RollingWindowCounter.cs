@@ -1,6 +1,8 @@
 // Live/RollingWindowCounter.cs
+using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
+
 
 namespace Miningcore.Live;
 

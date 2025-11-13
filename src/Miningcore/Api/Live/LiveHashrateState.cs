@@ -1,21 +1,25 @@
 // miningcore/src/Miningcore/Live/LiveHashrateState.cs
+using System;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading;
+
+using System.Collections.Generic;
+using System.Linq;
 
 namespace Miningcore.Live;
 
 /// <summary>
 /// Lock-free live hashrate + presence with per-worker tracking (address.miner)
-/// - Rolling ring per second (1024s) using fixed-point
+/// - Rolling ring per second (~1800s window, 2048-slot ring) using fixed-point
 /// - Timing Wheel eviction (buckets) O(1) per share, O(k) per minute
 /// </summary>
 public static class LiveHashrateState
 {
     public const int DefaultWindowSec = 600; // 10 min
-    public const int OnlineGraceSec = 120;
+    public const int OnlineGraceSec = 180;
 
-    private const int RingSize = 1024;
+    private const int RingSize = 2048;
     private const int Mask = RingSize - 1;
     private const long SCALE = 1_000_000; // 6 decimals
 
@@ -177,7 +181,7 @@ public static class LiveHashrateState
         {
             foreach(var kv in WorkerRings[i])
             {
-                if(kv.Key.poolId == poolId && kv.Key.address == address)
+                if (kv.Key.poolId == poolId && string.Equals(kv.Key.address, address, StringComparison.OrdinalIgnoreCase))
                 {
                     acc += kv.Value.SumWindow(windowSec);
                     if(WorkerLastSeen[i].TryGetValue(kv.Key, out var last) && last > lastMax)
@@ -216,16 +220,18 @@ public static class LiveHashrateState
 
     public static bool IsAddressOnline(string poolId, string address, int? windowOverrideSec = null)
     {
-        var (_, last) = GetAddressWindow(poolId, address, windowOverrideSec ?? DefaultWindowSec);
+        var win = windowOverrideSec ?? DefaultWindowSec;
+        var ( _, last ) = GetAddressWindow(poolId, address, win);
         if(last <= 0) return false;
 
-        var grace = Math.Max(windowOverrideSec ?? DefaultWindowSec, OnlineGraceSec);
+        var grace = Math.Max(win, OnlineGraceSec);
         return (DateTimeOffset.UtcNow.ToUnixTimeSeconds() - last) <= grace;
     }
 
+
     // ----------------- TIMING WHEEL EVICTION (per worker) -----------------
     private const int Buckets = 64;
-    private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(40);
+    private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(32);
     private static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(1);
 
     private static readonly ConcurrentQueue<ExpireToken>[] Wheel =
