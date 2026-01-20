@@ -14,8 +14,6 @@ build.backup/
 *.VC.db
 *.VC.opendb
 
-config.json
-
 [Tt]est[Rr]esult*/
 [Bb]uild[Ll]og.*
 
@@ -216,46 +214,22 @@ fabric.properties
 /*/*/*/*/*/*/*/*/*/*.o
 /*/*/*/*/*/*/*/*/*/*.o
 
-.claude
-CLAUDE.md
-AGENTS.md
 
-.build-marker
+# TEMP FILES
+TEMP
 
-#############
-## Docker & Secrets
-#############
+# Ignore compiled native code artifacts
+src/Native/libmultihash/**/*.o
+src/Native/libmultihash/**/*.so
+src/Native/libcryptonote/**/*.o
+src/Native/libcryptonote/**/*.so
+src/Native/libzanonote/**/*.o
+src/Native/libzanonote/**/*.so
+src/Native/libmerakipow/**/*.o
+src/Native/libmerakipow/**/*.so
+src/Native/**/CMakeFiles/
+src/Native/**/build/
 
-# Environment files (contain sensitive credentials)
-.env
-.env.*
-!.env.example
-
-# Docker secrets
-secrets/
-*.secret
-
-# Docker override files (may contain local configurations)
-docker-compose.override.yml
-docker-compose.*.local.yml
-
-# Kubernetes secrets
-*.key
-*.pem
-*.crt
-*.cer
-*.p12
-
-# Database dumps and backups
-*.sql.gz
-*.dump
-*.backup
-
-# Pool configuration files (may contain API keys)
-config.json
-config2.json
-**/config.local.json
-
-# Database initialization scripts (keep examples, ignore actual configs)
-db/pools/*.sql
-!db/pools/*.sql.example
+# Ignore
+script.py
+script.txt
