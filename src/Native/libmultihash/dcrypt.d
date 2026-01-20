@@ -1,0 +1,1 @@
+dcrypt.o: dcrypt.c

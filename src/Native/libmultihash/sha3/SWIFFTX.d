@@ -1,0 +1,2 @@
+sha3/SWIFFTX.o: sha3/SWIFFTX.c sha3/SWIFFTX.h
+sha3/SWIFFTX.h:
