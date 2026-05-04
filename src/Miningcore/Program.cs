@@ -10,6 +10,7 @@ using Autofac;
 using Autofac.Extensions.DependencyInjection;
 using Autofac.Features.Metadata;
 using AutoMapper;
+using Microsoft.Extensions.Logging.Abstractions;
 using Dapper;
 using FluentValidation;
 using McMaster.Extensions.CommandLineUtils;
@@ -355,7 +356,7 @@ public class Program : BackgroundService
         builder.RegisterInstance(gcStats);
 
         // AutoMapper
-        var amConf = new MapperConfiguration(cfg => { cfg.AddProfile(new AutoMapperProfile()); });
+        var amConf = new MapperConfiguration(cfg => { cfg.AddProfile(new AutoMapperProfile()); }, NullLoggerFactory.Instance);
         builder.Register((ctx, parms) => amConf.CreateMapper());
 
         ConfigurePersistence(builder);
