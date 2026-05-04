@@ -9,4 +9,4 @@ sudo apt-get update; \
 (cd src/Miningcore && \
 BUILDIR=${1:-../../build} && \
 echo "Building into $BUILDIR" && \
-dotnet publish -c Release --framework net8.0 -o $BUILDIR)
+dotnet publish -c Release --framework net10.0 -o $BUILDIR)

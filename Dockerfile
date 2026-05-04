@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM mcr.microsoft.com/dotnet/sdk:8.0-jammy AS builder
+FROM mcr.microsoft.com/dotnet/sdk:10.0-jammy AS builder
 WORKDIR /app
 
 # Install build dependencies
@@ -48,7 +48,7 @@ RUN chmod +x build-libs-linux.sh && \
     ./build-libs-linux.sh ../../build
 
 # Build the .NET application
-RUN dotnet publish -c Release --framework net8.0 --no-restore -o ../../build
+RUN dotnet publish -c Release --framework net10.0 --no-restore -o ../../build
 
 # Runtime stage
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-jammy

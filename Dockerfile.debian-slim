@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Build stage
-FROM mcr.microsoft.com/dotnet/sdk:8.0.401-bookworm-slim AS builder
+FROM mcr.microsoft.com/dotnet/sdk:10.0.401-bookworm-slim AS builder
 
 WORKDIR /miningcore
 
@@ -52,7 +52,7 @@ RUN chmod +x build-libs-linux.sh && \
     ./build-libs-linux.sh /usr/local/miningcore
 
 # Build the .NET application
-RUN dotnet publish -c Release --framework net8.0 --no-restore -o /usr/local/miningcore/
+RUN dotnet publish -c Release --framework net10.0 --no-restore -o /usr/local/miningcore/
 
 # Final image
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-bookworm-slim
