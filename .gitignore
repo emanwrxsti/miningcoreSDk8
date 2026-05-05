@@ -3,7 +3,8 @@
 *.sln.docstates
 .vs/
 .vscode/
-
+# Ignore native build noise
+src/Native/**
 [Dd]ebug/
 [Rr]elease/
 x64/
