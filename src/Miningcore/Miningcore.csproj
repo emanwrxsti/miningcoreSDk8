@@ -136,7 +136,7 @@
   </ItemGroup>
 
   <!-- Build library binaries from source on Linux -->
-  <Target Name="BuildNativeLibsLinux" AfterTargets="AfterBuild" Condition="'$(IsLinux)' == 'true'">
+  <Target Name="BuildNativeLibsLinux" AfterTargets="Build" Condition="'$(BuildNativeLibs)' == 'true' and $([MSBuild]::IsOSPlatform('Linux'))">
     <Exec Command="(cd $(ProjectDir) &amp;&amp; bash build-libs-linux.sh $(OutDir))" />
   </Target>
 
